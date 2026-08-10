@@ -1,0 +1,31 @@
+.card {
+  width: 100%;
+  max-width: 380px;
+}
+
+.title {
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.subtitle {
+  color: var(--color-text-muted);
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+}
+
+.link {
+  color: var(--color-primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.footerText {
+  margin-top: 1.5rem;
+  font-size: 0.85rem;
+  text-align: center;
+}
