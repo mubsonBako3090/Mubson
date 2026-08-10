@@ -1,0 +1,51 @@
+.wrapper {
+  display: flex;
+  min-height: 100vh;
+}
+
+.brandPanel {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, var(--color-primary), var(--color-primary-light));
+  color: #fff;
+  flex: 1;
+  padding: 2rem;
+  text-align: center;
+}
+
+.logo {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  margin-bottom: 1rem;
+}
+
+.brandTitle {
+  font-weight: 700;
+  font-size: 1.75rem;
+  margin: 0;
+}
+
+.brandSubtitle {
+  color: var(--color-accent);
+  margin-top: 0.25rem;
+}
+
+.formPanel {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .brandPanel {
+    display: flex;
+  }
+  .formPanel {
+    flex: 1;
+  }
+}
