@@ -1,0 +1,53 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  background-color: var(--color-surface);
+}
+
+.sectionTitle {
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  margin: 0 0 0.75rem;
+}
+
+.dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 0.4rem 1rem;
+  font-size: 0.9rem;
+}
+
+.dl dt {
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.dl dd {
+  margin: 0;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.totalBanner {
+  display: flex;
+  justify-content: space-between;
+  background-color: var(--color-primary);
+  color: #fff;
+  padding: 0.9rem 1.1rem;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+}

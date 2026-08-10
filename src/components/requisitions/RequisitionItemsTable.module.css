@@ -1,0 +1,72 @@
+.wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  min-width: 480px;
+}
+
+.table th {
+  text-align: left;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.table td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.cellInput {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.cellInputSmall {
+  width: 90px;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.removeBtn {
+  background: none;
+  border: none;
+  color: var(--color-rejected);
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.addBtn {
+  margin-top: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.85rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+.totalRow {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 2px solid var(--color-border);
+  font-weight: 700;
+}

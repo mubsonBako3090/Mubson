@@ -1,0 +1,10 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-bottom: 0.75rem;
+}

@@ -1,0 +1,75 @@
+.wrapper {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  background-color: var(--color-surface);
+}
+
+.heading {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 0 0 0.75rem;
+}
+
+.empty {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 0.75rem;
+}
+
+.comment {
+  background-color: var(--color-bg);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+}
+
+.commentHeader {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.author {
+  font-weight: 700;
+}
+
+.timestamp {
+  color: var(--color-text-muted);
+}
+
+.message {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.textarea {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.65rem;
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  resize: vertical;
+}
+
+@media (min-width: 576px) {
+  .composer {
+    flex-direction: row;
+    align-items: flex-end;
+  }
+}
