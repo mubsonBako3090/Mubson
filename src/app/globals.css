@@ -1,0 +1,41 @@
+:root {
+  --font-body: var(--font-sora), sans-serif;
+  --font-mono: var(--font-jetbrains-mono), monospace;
+
+  --color-primary: #14532d;      /* KSU deep green */
+  --color-primary-light: #1e7a42;
+  --color-accent: #c99a2e;       /* gold accent */
+  --color-bg: #f7f8f7;
+  --color-surface: #ffffff;
+  --color-border: #e2e5e2;
+  --color-text: #1a1f1a;
+  --color-text-muted: #5c665c;
+
+  --color-draft: #6b7280;
+  --color-pending: #b45309;
+  --color-returned: #9333ea;
+  --color-approved: #15803d;
+  --color-rejected: #b91c1c;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  margin: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+a {
+  color: inherit;
+}
