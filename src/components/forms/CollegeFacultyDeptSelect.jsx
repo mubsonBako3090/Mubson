@@ -1,97 +1,219 @@
 "use client";
 
+import { useEffect } from "react";
 import { COLLEGES, getCollegeById, getFaculty } from "@/constants/colleges";
-import { ROLE_ORG_SCOPE, ORG_FIELD_NOT_APPLICABLE } from "@/constants/roles";
+import {
+  ROLE_ORG_SCOPE,
+  ORG_FIELD_NOT_APPLICABLE,
+} from "@/constants/roles";
 import SelectField from "./SelectField";
 
-// Controlled cascading selector: choosing a college resets faculty/department,
-// choosing a faculty resets department. Parent owns the state and passes
-// down { collegeId, facultyId, department } + a single onChange(partialUpdate) handler.
-//
-// `role` determines which fields are shown at all: a Dean only ever picks a
-// College and Faculty (no single department), a Provost only picks a
-// College. Fields hidden this way are automatically set to
-// ORG_FIELD_NOT_APPLICABLE so the value stays valid for submission without
-// the user having to interact with a field that doesn't apply to their role.
-// When `role` is not yet chosen (or has no defined scope), all three fields
-// show, matching the previous default behaviour.
-export default function CollegeFacultyDeptSelect({ value, onChange, role }) {
-  const { collegeId, facultyId, department } = value;
+const ALL_ORG_FIELDS = ["collegeId", "facultyId", "department"];
 
-    const scope = (role && ROLE_ORG_SCOPE[role]) || ["collegeId", "facultyId", "department"];
-      const showFaculty = scope.includes("facultyId");
-        const showDepartment = scope.includes("department");
+export default function CollegeFacultyDeptSelect({
+  value,
+  onChange,
+  role,
+}) {
+  const {
+    collegeId = "",
+    facultyId = "",
+    department = "",
+  } = value || {};
 
-          const college = collegeId ? getCollegeById(collegeId) : null;
-            const faculty = collegeId && facultyId ? getFaculty(collegeId, facultyId) : null;
+  /*
+   * Determine which organizational fields apply to the selected role.
+   *
+   * If no role has been selected yet, show all fields so the user
+   * can see the normal hierarchy after selecting a role.
+   */
+  const scope =
+    role && ROLE_ORG_SCOPE[role]
+      ? ROLE_ORG_SCOPE[role]
+      : ALL_ORG_FIELDS;
 
-              function handleCollegeChange(newCollegeId) {
-                  onChange({
-                        collegeId: newCollegeId,
-                              facultyId: showFaculty ? "" : ORG_FIELD_NOT_APPLICABLE,
-                                    department: showDepartment ? "" : ORG_FIELD_NOT_APPLICABLE,
-                                        });
-                                          }
+  const showCollege = scope.includes("collegeId");
+  const showFaculty = scope.includes("facultyId");
+  const showDepartment = scope.includes("department");
 
-                                            function handleFacultyChange(newFacultyId) {
-                                                onChange({
-                                                      facultyId: newFacultyId,
-                                                            department: showDepartment ? "" : ORG_FIELD_NOT_APPLICABLE,
-                                                                });
-                                                                  }
+  /*
+   * Whenever the role changes, automatically clean up fields
+   * that are no longer applicable.
+   *
+   * Examples:
+   *
+   * Dean → Provost
+   * Faculty disappears and becomes N/A.
+   *
+   * Provost → VC
+   * College disappears and becomes N/A.
+   *
+   * Requester → VC
+   * College, Faculty and Department all become N/A.
+   */
+  useEffect(() => {
+    if (!role || !ROLE_ORG_SCOPE[role]) {
+      return;
+    }
 
-                                                                    return (
-                                                                        <>
-                                                                              <SelectField
-                                                                                      id="collegeId"
-                                                                                              label="College"
-                                                                                                      value={collegeId || ""}
-                                                                                                              onChange={(e) => handleCollegeChange(e.target.value)}
-                                                                                                                      required
-                                                                                                                            >
-                                                                                                                                    <option value="">Select college</option>
-                                                                                                                                            {COLLEGES.map((c) => (
-                                                                                                                                                      <option key={c.id} value={c.id}>
-                                                                                                                                                                  {c.name}
-                                                                                                                                                                            </option>
-                                                                                                                                                                                    ))}
-                                                                                                                                                                                          </SelectField>
+    const updates = {};
 
-                                                                                                                                                                                                {showFaculty && (
-                                                                                                                                                                                                        <SelectField
-                                                                                                                                                                                                                  id="facultyId"
-                                                                                                                                                                                                                            label="Faculty"
-                                                                                                                                                                                                                                      value={facultyId || ""}
-                                                                                                                                                                                                                                                onChange={(e) => handleFacultyChange(e.target.value)}
-                                                                                                                                                                                                                                                          disabled={!college}
-                                                                                                                                                                                                                                                                    required
-                                                                                                                                                                                                                                                                            >
-                                                                                                                                                                                                                                                                                      <option value="">Select faculty</option>
-                                                                                                                                                                                                                                                                                                {college?.faculties.map((f) => (
-                                                                                                                                                                                                                                                                                                            <option key={f.id} value={f.id}>
-                                                                                                                                                                                                                                                                                                                          {f.name}
-                                                                                                                                                                                                                                                                                                                                      </option>
-                                                                                                                                                                                                                                                                                                                                                ))}
-                                                                                                                                                                                                                                                                                                                                                        </SelectField>
-                                                                                                                                                                                                                                                                                                                                                              )}
+    if (!showCollege && collegeId !== ORG_FIELD_NOT_APPLICABLE) {
+      updates.collegeId = ORG_FIELD_NOT_APPLICABLE;
+    }
 
-                                                                                                                                                                                                                                                                                                                                                                    {showDepartment && (
-                                                                                                                                                                                                                                                                                                                                                                            <SelectField
-                                                                                                                                                                                                                                                                                                                                                                                      id="department"
-                                                                                                                                                                                                                                                                                                                                                                                                label="Department"
-                                                                                                                                                                                                                                                                                                                                                                                                          value={department || ""}
-                                                                                                                                                                                                                                                                                                                                                                                                                    onChange={(e) => onChange({ department: e.target.value })}
-                                                                                                                                                                                                                                                                                                                                                                                                                              disabled={!faculty}
-                                                                                                                                                                                                                                                                                                                                                                                                                                        required
-                                                                                                                                                                                                                                                                                                                                                                                                                                                >
-                                                                                                                                                                                                                                                                                                                                                                                                                                                          <option value="">Select department</option>
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                    {faculty?.departments.map((d) => (
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                <option key={d} value={d}>
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              {d}
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          </option>
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ))}
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            </SelectField>
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  )}
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      </>
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        );
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        }
+    if (!showFaculty && facultyId !== ORG_FIELD_NOT_APPLICABLE) {
+      updates.facultyId = ORG_FIELD_NOT_APPLICABLE;
+    }
+
+    if (
+      !showDepartment &&
+      department !== ORG_FIELD_NOT_APPLICABLE
+    ) {
+      updates.department = ORG_FIELD_NOT_APPLICABLE;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      onChange(updates);
+    }
+  }, [
+    role,
+    showCollege,
+    showFaculty,
+    showDepartment,
+    collegeId,
+    facultyId,
+    department,
+    onChange,
+  ]);
+
+  const college =
+    showCollege && collegeId && collegeId !== ORG_FIELD_NOT_APPLICABLE
+      ? getCollegeById(collegeId)
+      : null;
+
+  const faculty =
+    showFaculty &&
+    collegeId &&
+    collegeId !== ORG_FIELD_NOT_APPLICABLE &&
+    facultyId &&
+    facultyId !== ORG_FIELD_NOT_APPLICABLE
+      ? getFaculty(collegeId, facultyId)
+      : null;
+
+  function handleCollegeChange(newCollegeId) {
+    onChange({
+      collegeId: newCollegeId,
+
+      facultyId: showFaculty
+        ? ""
+        : ORG_FIELD_NOT_APPLICABLE,
+
+      department: showDepartment
+        ? ""
+        : ORG_FIELD_NOT_APPLICABLE,
+    });
+  }
+
+  function handleFacultyChange(newFacultyId) {
+    onChange({
+      facultyId: newFacultyId,
+
+      department: showDepartment
+        ? ""
+        : ORG_FIELD_NOT_APPLICABLE,
+    });
+  }
+
+  return (
+    <>
+      {/* College */}
+      {showCollege && (
+        <SelectField
+          id="collegeId"
+          label="College"
+          value={
+            collegeId === ORG_FIELD_NOT_APPLICABLE
+              ? ""
+              : collegeId || ""
+          }
+          onChange={(e) =>
+            handleCollegeChange(e.target.value)
+          }
+          required
+        >
+          <option value="">Select college</option>
+
+          {COLLEGES.map((collegeItem) => (
+            <option
+              key={collegeItem.id}
+              value={collegeItem.id}
+            >
+              {collegeItem.name}
+            </option>
+          ))}
+        </SelectField>
+      )}
+
+      {/* Faculty */}
+      {showFaculty && (
+        <SelectField
+          id="facultyId"
+          label="Faculty"
+          value={
+            facultyId === ORG_FIELD_NOT_APPLICABLE
+              ? ""
+              : facultyId || ""
+          }
+          onChange={(e) =>
+            handleFacultyChange(e.target.value)
+          }
+          disabled={!college}
+          required
+        >
+          <option value="">Select faculty</option>
+
+          {college?.faculties?.map((facultyItem) => (
+            <option
+              key={facultyItem.id}
+              value={facultyItem.id}
+            >
+              {facultyItem.name}
+            </option>
+          ))}
+        </SelectField>
+      )}
+
+      {/* Department */}
+      {showDepartment && (
+        <SelectField
+          id="department"
+          label="Department"
+          value={
+            department === ORG_FIELD_NOT_APPLICABLE
+              ? ""
+              : department || ""
+          }
+          onChange={(e) =>
+            onChange({
+              department: e.target.value,
+            })
+          }
+          disabled={!faculty}
+          required
+        >
+          <option value="">Select department</option>
+
+          {faculty?.departments?.map((departmentItem) => (
+            <option
+              key={departmentItem}
+              value={departmentItem}
+            >
+              {departmentItem}
+            </option>
+          ))}
+        </SelectField>
+      )}
+    </>
+  );
+    }
