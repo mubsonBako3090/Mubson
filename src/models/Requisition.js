@@ -80,25 +80,36 @@ const CommentSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const ApprovalChainStepSchema = new mongoose.Schema(
+  {
+    role: {
+      type: String,
+      required: true,
+    },
+
+    approver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
+    // approval = must approve
+    // processing = informational/processing stage after final approval
+    type: {
+      type: String,
+      enum: ["approval", "processing"],
+      default: "approval",
+    },
+  },
+  { _id: false }
+);
+
 const RequisitionSchema = new mongoose.Schema(
   {
-    /*
-    |--------------------------------------------------------------------------
-    | Requisition Number
-    |--------------------------------------------------------------------------
-    */
-
     requisitionNumber: {
       type: String,
       unique: true,
       sparse: true,
     },
-
-    /*
-    |--------------------------------------------------------------------------
-    | Requester
-    |--------------------------------------------------------------------------
-    */
 
     requester: {
       type: mongoose.Schema.Types.ObjectId,
@@ -106,17 +117,14 @@ const RequisitionSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Snapshot of the user's role when the requisition was created.
+    // This is important because routing depends on who created the request.
     requesterRole: {
       type: String,
       required: true,
     },
 
-    /*
-    |--------------------------------------------------------------------------
-    | Organizational placement snapshot
-    |--------------------------------------------------------------------------
-    */
-
+    // Organizational snapshot at the time of submission.
     collegeId: {
       type: String,
       required: true,
@@ -131,12 +139,6 @@ const RequisitionSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-
-    /*
-    |--------------------------------------------------------------------------
-    | Requisition details
-    |--------------------------------------------------------------------------
-    */
 
     category: {
       type: String,
@@ -170,12 +172,6 @@ const RequisitionSchema = new mongoose.Schema(
       default: [],
     },
 
-    /*
-    |--------------------------------------------------------------------------
-    | Overall status
-    |--------------------------------------------------------------------------
-    */
-
     status: {
       type: String,
       enum: Object.values(REQUISITION_STATUS),
@@ -183,30 +179,24 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-    |--------------------------------------------------------------------------
-    | Approval chain
-    |--------------------------------------------------------------------------
-    |
-    | IMPORTANT:
-    | Procurement Officer is NOT stored here.
-    |
-    | approvalChain contains ONLY actual approval authorities.
-    |
-    */
-
-    approvalChain: [
-      {
-        role: {
-          type: String,
-          required: true,
-        },
-
-        approver: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "User",
-        },
-      },
-    ],
+     * Example:
+     *
+     * Requester:
+     * HOD -> Dean -> Provost -> VC -> Procurement
+     *
+     * Provost:
+     * VC -> Procurement
+     *
+     * VC:
+     * Procurement
+     *
+     * Procurement:
+     * VC -> Procurement
+     */
+    approvalChain: {
+      type: [ApprovalChainStepSchema],
+      default: [],
+    },
 
     currentStepIndex: {
       type: Number,
@@ -214,75 +204,38 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-    |--------------------------------------------------------------------------
-    | Requester action
-    |--------------------------------------------------------------------------
-    */
-
+     * True when the requisition is waiting for the requester
+     * to edit and resubmit.
+     */
     awaitingRequesterAction: {
       type: Boolean,
       default: false,
     },
 
     /*
-    |--------------------------------------------------------------------------
-    | Governor escalation
-    |--------------------------------------------------------------------------
-    */
-
+     * True when the requisition exceeds the configured
+     * escalation threshold.
+     */
     requiresGovernorApproval: {
       type: Boolean,
       default: false,
     },
 
     /*
-    |--------------------------------------------------------------------------
-    | Procurement Processing
-    |--------------------------------------------------------------------------
-    |
-    | Procurement is NOT an approval step.
-    |
-    | Once the final approval authority (normally VC)
-    | approves the requisition, procurementStatus becomes
-    | "received".
-    |
-    */
-
-    procurementStatus: {
-      type: String,
-
-      enum: [
-        "not_received",
-        "received",
-        "processing",
-        "completed",
-      ],
-
-      default: "not_received",
-    },
-
-    procurementOfficer: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-    },
-
-    procurementReceivedAt: {
-      type: Date,
-    },
-
-    procurementStartedAt: {
-      type: Date,
-    },
-
-    procurementCompletedAt: {
+     * Indicates that VC has completed the final approval.
+     * Procurement can now commence processing.
+     */
+    finalApprovalAt: {
       type: Date,
     },
 
     /*
-    |--------------------------------------------------------------------------
-    | Dates
-    |--------------------------------------------------------------------------
-    */
+     * Indicates when the Procurement Officer took ownership
+     * of the post-approval processing stage.
+     */
+    procurementReceivedAt: {
+      type: Date,
+    },
 
     submittedAt: {
       type: Date,
