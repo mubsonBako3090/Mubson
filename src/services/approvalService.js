@@ -186,17 +186,21 @@ export async function approveStep({
      * to Procurement.
      */
     if (
-      nextStep &&
-      nextStep.role ===
-        ROLES.PROCUREMENT
-    ) {
-      requisition.currentStepIndex =
-        nextIndex;
+  nextStep &&
+  nextStep.role === ROLES.PROCUREMENT
+) {
+  requisition.currentStepIndex =
+    nextIndex;
 
-      requisition.procurementReceivedAt =
-        new Date();
+  requisition.procurementReceivedAt =
+    new Date();
+
+  requisition.procurementStatus =
+    "ready";
+
+  requisition.procurementOfficer =
+    nextStep.approver;
     }
-
     await requisition.save();
 
     await AuditLog.create({
