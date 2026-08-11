@@ -7,31 +7,16 @@ const ESCALATION_THRESHOLD = Number(
 );
 
 /*
- * Base hierarchy for each type of institution/college.
- *
- * The actual starting point is determined by the role of the person
- * creating the requisition.
- *
- * Example:
- *
- * Requester:
- * HOD → Dean → Provost → VC → Procurement
- *
- * HOD:
- * Dean → Provost → VC → Procurement
- *
- * Dean:
- * Provost → VC → Procurement
- *
- * Provost:
- * VC → Procurement
- *
- * VC:
- * Procurement
- *
- * Procurement:
- * VC → Procurement
- */
+|--------------------------------------------------------------------------
+| APPROVAL HIERARCHY
+|--------------------------------------------------------------------------
+|
+| Procurement is deliberately NOT included here.
+|
+| Procurement Officer is a processing role, not an approval role.
+|
+*/
+
 const ROUTING_CHAINS = {
   standard: [
     ROLES.HOD,
@@ -54,57 +39,25 @@ const ROUTING_CHAINS = {
 };
 
 /*
- * Remove all approval levels that are at or below the creator's
- * position in the normal hierarchy.
- *
- * Procurement is handled separately because Procurement has a special
- * workflow:
- *
- * Procurement → VC → Procurement
- */
-function getChainForCreator({ creatorRole, baseChain }) {
-  switch (creatorRole) {
-    case ROLES.REQUESTER:
-      return baseChain;
+|--------------------------------------------------------------------------
+| Build Approval Chain
+|--------------------------------------------------------------------------
+|
+| The chain is based on the REQUESTER'S role.
+|
+| Example:
+|
+| Requester → HOD → Dean → Provost → VC
+| HOD       → Dean → Provost → VC
+| Dean      → Provost → VC
+| Provost   → VC
+| VC        → [no approval needed]
+| Procurement → VC
+|
+*/
 
-    case ROLES.HOD:
-      return baseChain.filter((role) => role !== ROLES.HOD);
-
-    case ROLES.DEAN:
-      return baseChain.filter(
-        (role) => role !== ROLES.HOD && role !== ROLES.DEAN
-      );
-
-    case ROLES.PROVOST:
-      return baseChain.filter(
-        (role) =>
-          role !== ROLES.HOD &&
-          role !== ROLES.DEAN &&
-          role !== ROLES.PROVOST
-      );
-
-    case ROLES.VC:
-      return [];
-
-    case ROLES.PROCUREMENT:
-      /*
-       * Procurement is a special case.
-       *
-       * A Procurement Officer-created requisition must go directly
-       * to the Vice Chancellor and then return to Procurement.
-       */
-      return [ROLES.VC];
-
-    default:
-      throw new Error(
-        `Unsupported creator role for requisition routing: ${creatorRole}`
-      );
-  }
-}
-
-// Builds the ordered approval chain for a requisition.
 export async function buildApprovalChain({
-  creatorRole,
+  requesterRole,
   collegeId,
   facultyId,
   department,
@@ -116,44 +69,88 @@ export async function buildApprovalChain({
     throw new Error(`Unknown college: ${collegeId}`);
   }
 
-  const baseChain =
-    ROUTING_CHAINS[college.routingType] || ROUTING_CHAINS.standard;
+  const fullChain =
+    ROUTING_CHAINS[college.routingType] ||
+    ROUTING_CHAINS.standard;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Determine starting point based on requester's position
+  |--------------------------------------------------------------------------
+  */
+
+  let roleSequence = [...fullChain];
+
+  switch (requesterRole) {
+    case ROLES.REQUESTER:
+      // Normal staff/lecturer requester starts from HOD.
+      break;
+
+    case ROLES.HOD:
+      // HOD must not approve his/her own requisition.
+      roleSequence = roleSequence.slice(
+        roleSequence.indexOf(ROLES.DEAN)
+      );
+      break;
+
+    case ROLES.DEAN:
+      // Dean must not approve his/her own requisition.
+      roleSequence = roleSequence.slice(
+        roleSequence.indexOf(ROLES.PROVOST)
+      );
+      break;
+
+    case ROLES.PROVOST:
+      // Provost → VC.
+      roleSequence = roleSequence.slice(
+        roleSequence.indexOf(ROLES.VC)
+      );
+      break;
+
+    case ROLES.VC:
+      /*
+       * VC is already the highest approval authority.
+       * Therefore there is no approval step.
+       *
+       * The requisition will be considered approved
+       * and sent directly to Procurement.
+       */
+      roleSequence = [];
+      break;
+
+    case ROLES.PROCUREMENT:
+      /*
+       * Procurement-created requisition:
+       *
+       * Procurement Officer → VC → Procurement Officer
+       *
+       * Only VC approves.
+       */
+      roleSequence = [ROLES.VC];
+      break;
+
+    default:
+      throw new Error(
+        `Unsupported requester role: ${requesterRole}`
+      );
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | Governor escalation
+  |--------------------------------------------------------------------------
+  */
 
   const requiresGovernorApproval =
     Number(estimatedCost || 0) > ESCALATION_THRESHOLD;
 
   /*
-   * Determine the approval roles based on who created the requisition.
-   */
-  let roleSequence = getChainForCreator({
-    creatorRole,
-    baseChain,
-  });
-
-  /*
-   * Procurement-created requisitions:
+   * NOTE:
+   * Governor is currently not represented as an actual approval user.
    *
-   * Procurement → VC → Procurement
-   *
-   * The first Procurement step represents the Procurement Officer
-   * receiving the requisition back after VC approval.
+   * If you later decide to implement Governor approval,
+   * it should be added as a separate approval authority.
    */
-  const procurementCreated = creatorRole === ROLES.PROCUREMENT;
-
-  /*
-   * Normal requisitions always finish at Procurement.
-   *
-   * Procurement-created requisitions already have a special final
-   * Procurement step, so we don't add it twice.
-   */
-  if (!procurementCreated) {
-    roleSequence = [...roleSequence, ROLES.PROCUREMENT];
-  } else {
-    roleSequence = [
-      ROLES.VC,
-      ROLES.PROCUREMENT,
-    ];
-  }
 
   const chain = [];
 
@@ -163,7 +160,6 @@ export async function buildApprovalChain({
       collegeId,
       facultyId,
       department,
-      creatorRole,
     });
 
     chain.push({
@@ -172,30 +168,25 @@ export async function buildApprovalChain({
     });
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | Procurement is NOT added to approvalChain.
+  |--------------------------------------------------------------------------
+  */
+
   return {
     chain,
     requiresGovernorApproval,
+    procurementRequired: true,
   };
 }
 
 /*
- * Finds the active user responsible for a particular approval step.
- *
- * HOD:
- *   College + Faculty + Department
- *
- * Dean:
- *   College + Faculty
- *
- * Provost:
- *   College
- *
- * VC:
- *   University-wide
- *
- * Procurement:
- *   University-wide
- */
+|--------------------------------------------------------------------------
+| Resolve Approver
+|--------------------------------------------------------------------------
+*/
+
 async function resolveApproverForStep({
   role,
   collegeId,
@@ -207,29 +198,59 @@ async function resolveApproverForStep({
     accountStatus: "active",
   };
 
+  /*
+   * HOD:
+   * Same college + faculty + department.
+   */
   if (role === ROLES.HOD) {
     query.collegeId = collegeId;
     query.facultyId = facultyId;
     query.department = department;
   }
 
-  if (role === ROLES.DEAN) {
+  /*
+   * Dean:
+   * Same college + faculty.
+   */
+  else if (role === ROLES.DEAN) {
     query.collegeId = collegeId;
     query.facultyId = facultyId;
   }
 
-  if (role === ROLES.PROVOST) {
+  /*
+   * Provost:
+   * Same college.
+   */
+  else if (role === ROLES.PROVOST) {
     query.collegeId = collegeId;
   }
 
   /*
-   * VC and Procurement are university-wide.
-   *
-   * Therefore no college/faculty/department filtering is applied.
+   * VC:
+   * University-wide.
    */
 
   return User.findOne(query);
 }
+
+/*
+|--------------------------------------------------------------------------
+| Procurement Officer
+|--------------------------------------------------------------------------
+*/
+
+export async function resolveProcurementOfficer() {
+  return User.findOne({
+    role: ROLES.PROCUREMENT,
+    accountStatus: "active",
+  });
+}
+
+/*
+|--------------------------------------------------------------------------
+| Escalation helper
+|--------------------------------------------------------------------------
+*/
 
 export function isEscalated(estimatedCost) {
   return Number(estimatedCost || 0) > ESCALATION_THRESHOLD;
