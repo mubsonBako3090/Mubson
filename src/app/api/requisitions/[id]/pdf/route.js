@@ -5,6 +5,13 @@ import mongoose from "mongoose";
 import { verifyToken } from "@/lib/auth";
 import { connectDB } from "@/lib/db";
 import Requisition from "@/models/Requisition";
+
+// IMPORTANT:
+// Requisition contains ref: "User".
+// This import registers the User model with Mongoose
+// before populate("requester") is executed.
+import "@/models/User";
+
 import { generateRequisitionPDF } from "@/lib/pdf";
 
 /*
@@ -13,10 +20,8 @@ import { generateRequisitionPDF } from "@/lib/pdf";
 export const runtime = "nodejs";
 
 /*
- * This route must always run dynamically because it:
- * - reads authentication cookies
- * - connects to MongoDB
- * - generates a PDF
+ * This route uses cookies and MongoDB, so it must
+ * always be executed dynamically.
  */
 export const dynamic = "force-dynamic";
 
@@ -41,8 +46,6 @@ function getAuth() {
 
 /**
  * GET /api/requisitions/[id]/pdf
- *
- * Generates and returns a PDF version of a requisition.
  */
 export async function GET(request, { params }) {
   try {
@@ -65,7 +68,7 @@ export async function GET(request, { params }) {
 
     /*
      * --------------------------------------------------
-     * 2. VALIDATE REQUISITION ID
+     * 2. GET REQUISITION ID
      * --------------------------------------------------
      */
     const requisitionId = params?.id;
@@ -80,6 +83,11 @@ export async function GET(request, { params }) {
       );
     }
 
+    /*
+     * --------------------------------------------------
+     * 3. VALIDATE MONGODB OBJECT ID
+     * --------------------------------------------------
+     */
     if (!mongoose.isValidObjectId(requisitionId)) {
       return NextResponse.json(
         {
@@ -92,20 +100,30 @@ export async function GET(request, { params }) {
 
     /*
      * --------------------------------------------------
-     * 3. CONNECT TO DATABASE
+     * 4. CONNECT TO DATABASE
      * --------------------------------------------------
      */
     await connectDB();
 
     /*
      * --------------------------------------------------
-     * 4. FIND REQUISITION
+     * 5. FIND REQUISITION
      * --------------------------------------------------
+     *
+     * User.js has been imported above, so the
+     * "User" schema is registered before populate().
      */
-    const requisition = await Requisition.findById(requisitionId)
+    const requisition = await Requisition.findById(
+      requisitionId
+    )
       .populate("requester", "fullName")
       .lean();
 
+    /*
+     * --------------------------------------------------
+     * 6. CHECK WHETHER REQUISITION EXISTS
+     * --------------------------------------------------
+     */
     if (!requisition) {
       return NextResponse.json(
         {
@@ -118,7 +136,7 @@ export async function GET(request, { params }) {
 
     /*
      * --------------------------------------------------
-     * 5. GENERATE PDF
+     * 7. GENERATE PDF
      * --------------------------------------------------
      */
     const pdfBuffer = await generateRequisitionPDF(
@@ -127,19 +145,24 @@ export async function GET(request, { params }) {
     );
 
     /*
-     * Make sure PDF generation actually returned data.
+     * --------------------------------------------------
+     * 8. CHECK PDF BUFFER
+     * --------------------------------------------------
      */
     if (!pdfBuffer || pdfBuffer.length === 0) {
-      throw new Error("PDF generation returned an empty document.");
+      throw new Error(
+        "PDF generation returned an empty document."
+      );
     }
 
     /*
      * --------------------------------------------------
-     * 6. CREATE SAFE FILE NAME
+     * 9. CREATE SAFE FILE NAME
      * --------------------------------------------------
      */
     const requisitionNumber =
-      requisition.requisitionNumber || "draft-requisition";
+      requisition.requisitionNumber ||
+      "draft-requisition";
 
     const safeFileName = String(requisitionNumber)
       .replace(/[^a-zA-Z0-9_-]/g, "_")
@@ -147,45 +170,77 @@ export async function GET(request, { params }) {
 
     /*
      * --------------------------------------------------
-     * 7. RETURN PDF
+     * 10. RETURN PDF
      * --------------------------------------------------
-     *
-     * Uint8Array makes the binary response explicit and
-     * compatible with the Web Response API used by
-     * Next.js Route Handlers.
      */
-    return new Response(new Uint8Array(pdfBuffer), {
-      status: 200,
-      headers: {
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${safeFileName}.pdf"`,
-        "Content-Length": String(pdfBuffer.length),
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-      },
-    });
+    return new Response(
+      new Uint8Array(pdfBuffer),
+      {
+        status: 200,
+
+        headers: {
+          "Content-Type": "application/pdf",
+
+          "Content-Disposition":
+            `attachment; filename="${safeFileName}.pdf"`,
+
+          "Content-Length":
+            String(pdfBuffer.length),
+
+          "Cache-Control":
+            "no-store, no-cache, must-revalidate",
+        },
+      }
+    );
   } catch (error) {
     /*
-     * IMPORTANT:
-     * This gives us the real error in Vercel's Function Logs
-     * instead of silently returning a generic HTTP 500.
+     * --------------------------------------------------
+     * ERROR LOGGING
+     * --------------------------------------------------
+     *
+     * This will show the actual problem in Vercel
+     * Function Logs if something else goes wrong.
      */
-    console.error("====================================");
-    console.error("REQUISITION PDF GENERATION ERROR");
-    console.error("====================================");
+    console.error(
+      "===================================="
+    );
+
+    console.error(
+      "REQUISITION PDF GENERATION ERROR"
+    );
+
+    console.error(
+      "===================================="
+    );
+
     console.error(error);
-    console.error("Message:", error?.message);
-    console.error("Stack:", error?.stack);
+
+    console.error(
+      "Message:",
+      error?.message
+    );
+
+    console.error(
+      "Stack:",
+      error?.stack
+    );
 
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to generate requisition PDF.",
+        message:
+          "Failed to generate requisition PDF.",
+
+        /*
+         * Only expose the error during development.
+         */
         error:
-          process.env.NODE_ENV === "development"
+          process.env.NODE_ENV ===
+          "development"
             ? error?.message
             : undefined,
       },
       { status: 500 }
     );
   }
-}
+  }
