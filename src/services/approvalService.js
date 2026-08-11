@@ -18,8 +18,9 @@ import {
 import { ROLES } from "@/constants/roles";
 
 /*
- * Loads a requisition and confirms that the logged-in
- * user is the assigned person for the current approval step.
+ * --------------------------------------------------
+ * LOAD AND VERIFY CURRENT APPROVAL STEP
+ * --------------------------------------------------
  */
 async function loadAndVerifyStep(
   requisitionId,
@@ -36,6 +37,10 @@ async function loadAndVerifyStep(
     );
   }
 
+  /*
+   * Only pending requisitions can normally
+   * receive an approval action.
+   */
   if (
     requisition.status !==
     REQUISITION_STATUS.PENDING
@@ -63,6 +68,10 @@ async function loadAndVerifyStep(
     );
   }
 
+  /*
+   * Make sure this user is the assigned
+   * person for the current step.
+   */
   if (
     String(step.approver) !==
     String(approverId)
@@ -73,7 +82,8 @@ async function loadAndVerifyStep(
   }
 
   /*
-   * Procurement processing is NOT an approval action.
+   * Procurement is a processing stage,
+   * not an approval stage.
    */
   if (
     step.type === "processing"
@@ -87,19 +97,9 @@ async function loadAndVerifyStep(
 }
 
 /*
- * Approves the current approval step.
- *
- * IMPORTANT:
- *
- * VC is the final approval authority.
- *
- * Once VC approves:
- *
- * status = APPROVED
- *
- * currentStepIndex = Procurement
- *
- * Procurement is then notified.
+ * --------------------------------------------------
+ * APPROVE CURRENT STEP
+ * --------------------------------------------------
  */
 export async function approveStep({
   requisitionId,
@@ -118,7 +118,7 @@ export async function approveStep({
     ];
 
   /*
-   * Record the approval.
+   * Record the approval decision.
    */
   await Approval.create({
     requisition:
@@ -140,17 +140,11 @@ export async function approveStep({
   });
 
   /*
-   * Determine whether this is the final approval
-   * authority.
-   *
-   * VC is final.
+   * VC is the final approval authority.
    */
   const isFinalApproval =
     step.role === ROLES.VC;
 
-  /*
-   * Find the next step.
-   */
   const nextIndex =
     requisition.currentStepIndex + 1;
 
@@ -160,13 +154,9 @@ export async function approveStep({
     ];
 
   /*
-   * VC has approved.
-   *
-   * Therefore:
-   *
-   * - requisition is APPROVED
-   * - approval process is complete
-   * - Procurement becomes the processing stage
+   * --------------------------------------------------
+   * FINAL APPROVAL BY VC
+   * --------------------------------------------------
    */
   if (isFinalApproval) {
     requisition.status =
@@ -182,27 +172,93 @@ export async function approveStep({
       false;
 
     /*
-     * Move the visible progress indicator
-     * to Procurement.
+     * Find Procurement stage.
      */
+    const procurementStep =
+      requisition.approvalChain.find(
+        (approvalStep) =>
+          approvalStep.role ===
+            ROLES.PROCUREMENT &&
+          approvalStep.type ===
+            "processing"
+      );
+
+    /*
+     * Assign Procurement Officer.
+     */
+    let procurementOfficer = null;
+
     if (
-  nextStep &&
-  nextStep.role === ROLES.PROCUREMENT
-) {
-  requisition.currentStepIndex =
-    nextIndex;
-
-  requisition.procurementReceivedAt =
-    new Date();
-
-  requisition.procurementStatus =
-    "ready";
-
-  requisition.procurementOfficer =
-    nextStep.approver;
+      procurementStep?.approver
+    ) {
+      procurementOfficer =
+        await User.findById(
+          procurementStep.approver
+        );
     }
+
+    /*
+     * If the chain does not contain a
+     * Procurement Officer, find an active one.
+     */
+    if (!procurementOfficer) {
+      procurementOfficer =
+        await User.findOne({
+          role: ROLES.PROCUREMENT,
+          accountStatus: "active",
+        });
+    }
+
+    if (!procurementOfficer) {
+      throw new Error(
+        "No active Procurement Officer is configured."
+      );
+    }
+
+    /*
+     * Move current stage to Procurement.
+     */
+    if (procurementStep) {
+      const procurementIndex =
+        requisition.approvalChain.findIndex(
+          (approvalStep) =>
+            approvalStep.role ===
+              ROLES.PROCUREMENT &&
+            approvalStep.type ===
+              "processing"
+        );
+
+      if (
+        procurementIndex >= 0
+      ) {
+        requisition.currentStepIndex =
+          procurementIndex;
+      }
+    }
+
+    /*
+     * --------------------------------------------------
+     * PROCUREMENT STATUS
+     * --------------------------------------------------
+     *
+     * VC has approved.
+     *
+     * Therefore Procurement can now begin.
+     */
+    requisition.procurementStatus =
+      "ready";
+
+    requisition.procurementOfficer =
+      procurementOfficer._id;
+
+    requisition.procurementReceivedAt =
+      new Date();
+
     await requisition.save();
 
+    /*
+     * Audit final approval.
+     */
     await AuditLog.create({
       actor:
         approverUser.id,
@@ -221,13 +277,15 @@ export async function approveStep({
           step.role,
 
         nextStage:
-          nextStep?.role || null,
+          ROLES.PROCUREMENT,
+
+        procurementOfficer:
+          procurementOfficer._id,
       },
     });
 
     /*
-     * Notify requester that final approval
-     * has been granted.
+     * Notify requester.
      */
     await sendRequisitionApprovedEmail(
       requisition.requester,
@@ -235,33 +293,24 @@ export async function approveStep({
     );
 
     /*
-     * Notify Procurement that processing can begin.
+     * Notify Procurement Officer.
      */
-    if (
-      nextStep?.approver
-    ) {
-      const procurementOfficer =
-        await User.findById(
-          nextStep.approver
-        );
-
-      if (procurementOfficer) {
-        await sendApprovalStepEmail(
-          procurementOfficer,
-          requisition
-        );
-      }
-    }
+    await sendApprovalStepEmail(
+      procurementOfficer,
+      requisition
+    );
 
     return requisition;
   }
 
   /*
-   * Normal approval step:
+   * --------------------------------------------------
+   * NORMAL APPROVAL
+   * --------------------------------------------------
    *
    * HOD -> Dean
    * Dean -> Provost
-   * etc.
+   * Provost -> VC
    */
   requisition.currentStepIndex =
     nextIndex;
@@ -289,7 +338,7 @@ export async function approveStep({
 
     details: {
       stepIndex:
-        requisition.currentStepIndex,
+        nextIndex,
 
       role:
         step.role,
@@ -319,7 +368,9 @@ export async function approveStep({
 }
 
 /*
- * Return for clarification.
+ * --------------------------------------------------
+ * RETURN FOR CLARIFICATION
+ * --------------------------------------------------
  */
 export async function returnStep({
   requisitionId,
@@ -357,7 +408,8 @@ export async function returnStep({
   });
 
   /*
-   * First approval step returns to requester.
+   * First approval step:
+   * return directly to requester.
    */
   if (
     requisition.currentStepIndex ===
@@ -368,7 +420,7 @@ export async function returnStep({
   }
 
   /*
-   * Otherwise return to the previous
+   * Otherwise return to previous
    * approval authority.
    */
   else {
@@ -381,6 +433,23 @@ export async function returnStep({
 
   requisition.status =
     REQUISITION_STATUS.RETURNED;
+
+  /*
+   * If Procurement somehow returns a processing
+   * stage, reset procurement status.
+   */
+  if (
+    requisition.procurementStatus
+  ) {
+    requisition.procurementStatus =
+      undefined;
+
+    requisition.procurementOfficer =
+      undefined;
+
+    requisition.procurementReceivedAt =
+      undefined;
+  }
 
   if (comment) {
     requisition.comments.push({
@@ -419,7 +488,7 @@ export async function returnStep({
   );
 
   /*
-   * Notify previous approver if applicable.
+   * Notify previous approver.
    */
   if (
     !requisition.awaitingRequesterAction
@@ -450,7 +519,9 @@ export async function returnStep({
 }
 
 /*
- * Reject requisition.
+ * --------------------------------------------------
+ * REJECT REQUISITION
+ * --------------------------------------------------
  */
 export async function rejectStep({
   requisitionId,
@@ -488,6 +559,9 @@ export async function rejectStep({
     comment,
   });
 
+  /*
+   * Final rejection.
+   */
   if (isFinal) {
     requisition.status =
       REQUISITION_STATUS.REJECTED;
@@ -497,7 +571,13 @@ export async function rejectStep({
 
     requisition.awaitingRequesterAction =
       false;
-  } else {
+  }
+
+  /*
+   * Non-final rejection:
+   * send back to requester for editing.
+   */
+  else {
     requisition.status =
       REQUISITION_STATUS.RETURNED;
 
@@ -507,6 +587,25 @@ export async function rejectStep({
     requisition.currentStepIndex =
       0;
   }
+
+  /*
+   * Clear Procurement state if the
+   * requisition is sent backward.
+   */
+  requisition.procurementStatus =
+    undefined;
+
+  requisition.procurementOfficer =
+    undefined;
+
+  requisition.procurementReceivedAt =
+    undefined;
+
+  requisition.procurementStartedAt =
+    undefined;
+
+  requisition.procurementCompletedAt =
+    undefined;
 
   if (comment) {
     requisition.comments.push({
