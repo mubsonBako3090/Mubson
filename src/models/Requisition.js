@@ -3,55 +3,178 @@ import { REQUISITION_STATUS } from "@/constants/requisitionOptions";
 
 const ItemSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    quantity: { type: Number, required: true, min: 1 },
-    unitCost: { type: Number, required: true, min: 0 },
-    // Computed at save time: quantity * unitCost
-    totalCost: { type: Number, required: true, min: 0 },
+    name: {
+      type: String,
+      required: true,
+    },
+
+    quantity: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+
+    unitCost: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    totalCost: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
   },
   { _id: false }
 );
 
 const AttachmentSchema = new mongoose.Schema(
   {
-    url: { type: String, required: true },
-    publicId: { type: String, required: true }, // Cloudinary public_id, for deletion
-    fileName: { type: String, required: true },
-    fileType: { type: String, required: true },
-    uploadedAt: { type: Date, default: Date.now },
+    url: {
+      type: String,
+      required: true,
+    },
+
+    publicId: {
+      type: String,
+      required: true,
+    },
+
+    fileName: {
+      type: String,
+      required: true,
+    },
+
+    fileType: {
+      type: String,
+      required: true,
+    },
+
+    uploadedAt: {
+      type: Date,
+      default: Date.now,
+    },
   },
   { _id: false }
 );
 
 const CommentSchema = new mongoose.Schema(
   {
-    author: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    message: { type: String, required: true },
-    createdAt: { type: Date, default: Date.now },
+    author: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    message: {
+      type: String,
+      required: true,
+    },
+
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
   },
   { _id: false }
 );
 
 const RequisitionSchema = new mongoose.Schema(
   {
-    requisitionNumber: { type: String, unique: true, sparse: true }, // assigned on submit, not on draft
+    /*
+    |--------------------------------------------------------------------------
+    | Requisition Number
+    |--------------------------------------------------------------------------
+    */
 
-    requester: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    requisitionNumber: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
 
-    // Snapshot of requester's org placement at time of submission (routing depends on this).
-    collegeId: { type: String, required: true },
-    facultyId: { type: String, required: true },
-    department: { type: String, required: true },
+    /*
+    |--------------------------------------------------------------------------
+    | Requester
+    |--------------------------------------------------------------------------
+    */
 
-    category: { type: String },
-    purpose: { type: String },
-    urgency: { type: String },
+    requester: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
 
-    items: { type: [ItemSchema], default: [] },
-    estimatedCost: { type: Number, default: 0 }, // sum of items[].totalCost
+    requesterRole: {
+      type: String,
+      required: true,
+    },
 
-    attachments: { type: [AttachmentSchema], default: [] },
-    comments: { type: [CommentSchema], default: [] },
+    /*
+    |--------------------------------------------------------------------------
+    | Organizational placement snapshot
+    |--------------------------------------------------------------------------
+    */
+
+    collegeId: {
+      type: String,
+      required: true,
+    },
+
+    facultyId: {
+      type: String,
+      required: true,
+    },
+
+    department: {
+      type: String,
+      required: true,
+    },
+
+    /*
+    |--------------------------------------------------------------------------
+    | Requisition details
+    |--------------------------------------------------------------------------
+    */
+
+    category: {
+      type: String,
+    },
+
+    purpose: {
+      type: String,
+    },
+
+    urgency: {
+      type: String,
+    },
+
+    items: {
+      type: [ItemSchema],
+      default: [],
+    },
+
+    estimatedCost: {
+      type: Number,
+      default: 0,
+    },
+
+    attachments: {
+      type: [AttachmentSchema],
+      default: [],
+    },
+
+    comments: {
+      type: [CommentSchema],
+      default: [],
+    },
+
+    /*
+    |--------------------------------------------------------------------------
+    | Overall status
+    |--------------------------------------------------------------------------
+    */
 
     status: {
       type: String,
@@ -59,29 +182,120 @@ const RequisitionSchema = new mongoose.Schema(
       default: REQUISITION_STATUS.DRAFT,
     },
 
-    // Ordered list of role-steps this requisition must pass through, computed at submit time
-    // from lib/routing.js based on the requester's college/faculty/department and estimatedCost.
+    /*
+    |--------------------------------------------------------------------------
+    | Approval chain
+    |--------------------------------------------------------------------------
+    |
+    | IMPORTANT:
+    | Procurement Officer is NOT stored here.
+    |
+    | approvalChain contains ONLY actual approval authorities.
+    |
+    */
+
     approvalChain: [
       {
-        role: { type: String, required: true },
-        approver: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, // resolved user for that step, if known
+        role: {
+          type: String,
+          required: true,
+        },
+
+        approver: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+        },
       },
     ],
-    currentStepIndex: { type: Number, default: 0 },
 
-    // True when a "returned" requisition is waiting on the requester to edit
-    // and resubmit (e.g. the first-step approver returned it, or an approver
-    // rejected without finality). False when it's a step-to-previous-approver
-    // return, meaning the previous approver needs to act again, not the requester.
-    awaitingRequesterAction: { type: Boolean, default: false },
+    currentStepIndex: {
+      type: Number,
+      default: 0,
+    },
 
-    // Whether this requisition crossed the escalation threshold and needs Governor sign-off.
-    requiresGovernorApproval: { type: Boolean, default: false },
+    /*
+    |--------------------------------------------------------------------------
+    | Requester action
+    |--------------------------------------------------------------------------
+    */
 
-    submittedAt: { type: Date },
-    decidedAt: { type: Date }, // set when finally approved or finally rejected
+    awaitingRequesterAction: {
+      type: Boolean,
+      default: false,
+    },
+
+    /*
+    |--------------------------------------------------------------------------
+    | Governor escalation
+    |--------------------------------------------------------------------------
+    */
+
+    requiresGovernorApproval: {
+      type: Boolean,
+      default: false,
+    },
+
+    /*
+    |--------------------------------------------------------------------------
+    | Procurement Processing
+    |--------------------------------------------------------------------------
+    |
+    | Procurement is NOT an approval step.
+    |
+    | Once the final approval authority (normally VC)
+    | approves the requisition, procurementStatus becomes
+    | "received".
+    |
+    */
+
+    procurementStatus: {
+      type: String,
+
+      enum: [
+        "not_received",
+        "received",
+        "processing",
+        "completed",
+      ],
+
+      default: "not_received",
+    },
+
+    procurementOfficer: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
+    procurementReceivedAt: {
+      type: Date,
+    },
+
+    procurementStartedAt: {
+      type: Date,
+    },
+
+    procurementCompletedAt: {
+      type: Date,
+    },
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dates
+    |--------------------------------------------------------------------------
+    */
+
+    submittedAt: {
+      type: Date,
+    },
+
+    decidedAt: {
+      type: Date,
+    },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+  }
 );
 
-export default mongoose.models.Requisition || mongoose.model("Requisition", RequisitionSchema);
+export default mongoose.models.Requisition ||
+  mongoose.model("Requisition", RequisitionSchema);
