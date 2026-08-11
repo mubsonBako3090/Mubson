@@ -25,11 +25,8 @@ function getAuth() {
 }
 
 /*
-|--------------------------------------------------------------------------
-| GET
-|--------------------------------------------------------------------------
-*/
-
+ * GET single requisition.
+ */
 export async function GET(
   request,
   { params }
@@ -65,10 +62,6 @@ export async function GET(
         "approvalChain.approver",
         "fullName role"
       )
-      .populate(
-        "procurementOfficer",
-        "fullName role email"
-      )
       .lean();
 
   if (!requisition) {
@@ -89,11 +82,14 @@ export async function GET(
 }
 
 /*
-|--------------------------------------------------------------------------
-| PATCH
-|--------------------------------------------------------------------------
-*/
-
+ * PATCH
+ *
+ * Used for:
+ *
+ * 1. Editing a draft
+ * 2. Editing a returned requisition
+ * 3. Adding clarification comments
+ */
 export async function PATCH(
   request,
   { params }
@@ -118,12 +114,12 @@ export async function PATCH(
     await connectDB();
 
     /*
-     |--------------------------------------------------------------------------
-     | Comment
-     |--------------------------------------------------------------------------
+     * COMMENT
      */
-
-    if (body.type === "comment") {
+    if (
+      body.type ===
+      "comment"
+    ) {
       if (
         !body.message ||
         !body.message.trim()
@@ -192,11 +188,8 @@ export async function PATCH(
     }
 
     /*
-     |--------------------------------------------------------------------------
-     | Edit draft / returned requisition
-     |--------------------------------------------------------------------------
+     * EDIT DRAFT / RETURNED REQUISITION
      */
-
     const {
       error,
       value,
@@ -209,7 +202,8 @@ export async function PATCH(
       return NextResponse.json(
         {
           message:
-            error.details[0].message,
+            error.details[0]
+              .message,
         },
         {
           status: 400,
@@ -223,8 +217,7 @@ export async function PATCH(
           params.id,
 
         requesterUser: {
-          id:
-            auth.sub,
+          id: auth.sub,
 
           role:
             auth.role,
@@ -239,8 +232,7 @@ export async function PATCH(
             auth.department,
         },
 
-        payload:
-          value,
+        payload: value,
       });
 
     return NextResponse.json({
