@@ -42,7 +42,7 @@ export default function Sidebar({ role }) {
   return (
     <aside className={`${styles.sidebar} ${sidebarOpen ? styles.open : styles.collapsed}`}>
       <div className={styles.brand}>
-        <img src="/images/ksu-logo.png" alt="KSU" className={styles.logo} />
+        <img src="/images (1).jpeg" alt="KSU" className={styles.logo} />
         <span className={styles.brandText}>KSU Procurement</span>
       </div>
 
