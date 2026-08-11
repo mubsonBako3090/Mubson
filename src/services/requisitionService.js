@@ -113,30 +113,15 @@ export async function saveDraft({
    * New draft
    */
   else {
-    requisition =
-      await Requisition.create({
-        ...data,
-
-        requester: requesterUser.id,
-
-        requesterRole:
-          requesterUser.role,
-
-        collegeId:
-          requesterUser.collegeId,
-
-        facultyId:
-          requesterUser.facultyId,
-
-        department:
-          requesterUser.department,
-
-        status:
-          REQUISITION_STATUS.DRAFT,
-
-        procurementStatus:
-          "not_received",
-      });
+    requisition = await Requisition.create({
+  ...data,
+  requester: requesterUser.id,
+  requesterRole: requesterUser.role,
+  collegeId: requesterUser.collegeId,
+  facultyId: requesterUser.facultyId,
+  department: requesterUser.department,
+  status: REQUISITION_STATUS.DRAFT,
+});
   }
 
   await AuditLog.create({
