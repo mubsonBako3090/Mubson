@@ -233,26 +233,43 @@ export async function GET() {
      * current step = procurement
      */
     if (auth.role === ROLES.PROCUREMENT) {
-      const approvedRequisitions =
-        await Requisition.find({
-          status:
-            REQUISITION_STATUS.APPROVED,
+  const [
+    readyForProcurement,
+    processingCount,
+    completedCount,
+  ] = await Promise.all([
+    Requisition.countDocuments({
+      status: REQUISITION_STATUS.APPROVED,
+      procurementStatus: "ready",
+      procurementOfficer: auth.sub,
+    }),
 
-          finalApprovalAt: {
-            $exists: true,
-          },
+    Requisition.countDocuments({
+      status: REQUISITION_STATUS.APPROVED,
+      procurementStatus: "processing",
+      procurementOfficer: auth.sub,
+    }),
 
-          "approvalChain": {
-            $elemMatch: {
-              role: ROLES.PROCUREMENT,
-              type: "processing",
-            },
-          },
-        })
-          .select(
-            "_id currentStepIndex approvalChain"
-          )
-          .lean();
+    Requisition.countDocuments({
+      status: REQUISITION_STATUS.APPROVED,
+      procurementStatus: "completed",
+      procurementOfficer: auth.sub,
+    }),
+  ]);
+
+  return NextResponse.json({
+    role: auth.role,
+
+    readyForProcurement,
+    processingCount,
+    completedCount,
+
+    totalProcurementItems:
+      readyForProcurement +
+      processingCount +
+      completedCount,
+  });
+    }
 
       /*
        * Only count requisitions whose CURRENT stage
