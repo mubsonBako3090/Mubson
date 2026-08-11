@@ -114,13 +114,14 @@ export default function RequisitionDetailPage() {
 
         <div className={styles.sideCol}>
           <section className={styles.section}>
-            <h4 className={styles.sectionTitle}>Approval Progress</h4>
-            <RequisitionStatusTimeline
-              approvalChain={requisition.approvalChain}
-              currentStepIndex={requisition.currentStepIndex}
-              status={requisition.status}
-            />
-          </section>
+  <h4 className={styles.sectionTitle}>
+    Approval Progress
+  </h4>
+
+  <RequisitionStatusTimeline
+    requisition={requisition}
+  />
+</section>
 
           <section className={styles.section}>
             <h4 className={styles.sectionTitle}>Estimated Cost</h4>
