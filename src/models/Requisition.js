@@ -234,9 +234,29 @@ const RequisitionSchema = new mongoose.Schema(
      * of the post-approval processing stage.
      */
     procurementReceivedAt: {
-      type: Date,
-    },
+  type: Date,
+},
 
+/*
+ * Procurement processing status.
+ *
+ * This starts as "ready" when VC gives final approval
+ * and the requisition reaches the Procurement Officer.
+ */
+procurementStatus: {
+  type: String,
+  enum: ["ready", "processing", "completed"],
+  default: "ready",
+},
+
+/*
+ * Procurement Officer responsible for processing
+ * the approved requisition.
+ */
+procurementOfficer: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "User",
+},
     submittedAt: {
       type: Date,
     },
