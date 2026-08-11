@@ -2,6 +2,7 @@ import Requisition from "@/models/Requisition";
 import Approval from "@/models/Approval";
 import AuditLog from "@/models/AuditLog";
 import User from "@/models/User";
+
 import {
   REQUISITION_STATUS,
   APPROVAL_ACTIONS,
@@ -14,10 +15,16 @@ import {
   sendRequisitionReturnedEmail,
 } from "@/lib/mailer";
 
+import {
+  resolveProcurementOfficer,
+} from "@/lib/routing";
+
 /*
- * Loads a requisition and confirms that the authenticated user
- * is the person assigned to the current approval step.
- */
+|--------------------------------------------------------------------------
+| Load and verify current approval step
+|--------------------------------------------------------------------------
+*/
+
 async function loadAndVerifyStep(
   requisitionId,
   approverId
@@ -25,7 +32,9 @@ async function loadAndVerifyStep(
   const requisition =
     await Requisition.findById(
       requisitionId
-    ).populate("requester");
+    )
+      .populate("requester")
+      .populate("procurementOfficer");
 
   if (!requisition) {
     throw new Error(
@@ -34,11 +43,11 @@ async function loadAndVerifyStep(
   }
 
   /*
-   * A requisition must normally be PENDING.
-   *
-   * A RETURNED requisition is also allowed when it has been
-   * returned to a previous approver rather than the requester.
+   * Approval actions are allowed only
+   * while the requisition is awaiting
+   * an approval.
    */
+
   if (
     requisition.status !==
     REQUISITION_STATUS.PENDING
@@ -62,14 +71,19 @@ async function loadAndVerifyStep(
 
   if (!step) {
     throw new Error(
-      "No approval step exists for the current position."
+      "No active approval step exists."
     );
   }
 
+  /*
+   * Security:
+   * The logged-in user MUST be the
+   * assigned approver.
+   */
+
   if (
-    !step.approver ||
     String(step.approver) !==
-      String(approverId)
+    String(approverId)
   ) {
     throw new Error(
       "You are not the assigned approver for this requisition's current step."
@@ -80,8 +94,11 @@ async function loadAndVerifyStep(
 }
 
 /*
- * Approve the current step.
- */
+|--------------------------------------------------------------------------
+| APPROVE
+|--------------------------------------------------------------------------
+*/
+
 export async function approveStep({
   requisitionId,
   approverUser,
@@ -93,23 +110,21 @@ export async function approveStep({
       approverUser.id
     );
 
-  const currentStepIndex =
-    requisition.currentStepIndex;
-
   const step =
     requisition.approvalChain[
-      currentStepIndex
+      requisition.currentStepIndex
     ];
 
   /*
-   * Record the approval BEFORE changing the current step.
+   * Record approval.
    */
+
   await Approval.create({
     requisition:
       requisition._id,
 
     stepIndex:
-      currentStepIndex,
+      requisition.currentStepIndex,
 
     role:
       step.role,
@@ -123,14 +138,22 @@ export async function approveStep({
     comment,
   });
 
-  const isLastStep =
-    currentStepIndex ===
+  const isLastApprovalStep =
+    requisition.currentStepIndex ===
     requisition.approvalChain.length - 1;
 
-  if (isLastStep) {
+  /*
+   |--------------------------------------------------------------------------
+   | LAST APPROVAL = FINAL APPROVAL
+   |--------------------------------------------------------------------------
+   */
+
+  if (isLastApprovalStep) {
     /*
-     * Final approval.
+     * The final approval authority
+     * has approved the requisition.
      */
+
     requisition.status =
       REQUISITION_STATUS.APPROVED;
 
@@ -139,24 +162,107 @@ export async function approveStep({
 
     requisition.awaitingRequesterAction =
       false;
-  } else {
+
     /*
-     * Move to the next person in the chain.
+     * Procurement is now allowed
+     * to commence processing.
      */
-    requisition.currentStepIndex =
-      currentStepIndex + 1;
 
-    requisition.status =
-      REQUISITION_STATUS.PENDING;
+    const procurementOfficer =
+      await resolveProcurementOfficer();
 
-    requisition.awaitingRequesterAction =
-      false;
+    if (procurementOfficer) {
+      requisition.procurementOfficer =
+        procurementOfficer._id;
+
+      requisition.procurementStatus =
+        "received";
+
+      requisition.procurementReceivedAt =
+        new Date();
+    }
+
+    await requisition.save();
+
+    /*
+     |--------------------------------------------------------------------------
+     | Audit final approval
+     |--------------------------------------------------------------------------
+     */
+
+    await AuditLog.create({
+      actor:
+        approverUser.id,
+
+      action:
+        "requisition.final_approval",
+
+      entityType:
+        "Requisition",
+
+      entityId:
+        requisition._id,
+
+      details: {
+        role:
+          step.role,
+
+        comment,
+      },
+    });
+
+    /*
+     |--------------------------------------------------------------------------
+     | Notify requester
+     |--------------------------------------------------------------------------
+     */
+
+    await sendRequisitionApprovedEmail(
+      requisition.requester,
+      requisition
+    );
+
+    /*
+     |--------------------------------------------------------------------------
+     | Notify Procurement
+     |--------------------------------------------------------------------------
+     */
+
+    if (procurementOfficer) {
+      await sendApprovalStepEmail(
+        procurementOfficer,
+        requisition
+      );
+    }
+
+    return requisition;
   }
+
+  /*
+   |--------------------------------------------------------------------------
+   | NOT THE LAST APPROVAL STEP
+   |--------------------------------------------------------------------------
+   */
+
+  requisition.currentStepIndex += 1;
+
+  requisition.status =
+    REQUISITION_STATUS.PENDING;
+
+  requisition.awaitingRequesterAction =
+    false;
 
   await requisition.save();
 
+  /*
+   |--------------------------------------------------------------------------
+   | Audit
+   |--------------------------------------------------------------------------
+   */
+
   await AuditLog.create({
-    actor: approverUser.id,
+    actor:
+      approverUser.id,
 
     action:
       "requisition.approve",
@@ -169,47 +275,37 @@ export async function approveStep({
 
     details: {
       stepIndex:
-        currentStepIndex,
+        requisition.currentStepIndex - 1,
 
       role:
         step.role,
 
-      nextStepIndex:
-        isLastStep
-          ? null
-          : currentStepIndex + 1,
+      comment,
     },
   });
 
   /*
-   * If this was the final step, notify the requester.
+   |--------------------------------------------------------------------------
+   | Notify next approver
+   |--------------------------------------------------------------------------
    */
-  if (isLastStep) {
-    await sendRequisitionApprovedEmail(
-      requisition.requester,
-      requisition
-    );
-  } else {
-    /*
-     * Notify the next approver.
-     */
-    const nextStep =
-      requisition.approvalChain[
-        requisition.currentStepIndex
-      ];
 
-    if (nextStep?.approver) {
-      const nextApprover =
-        await User.findById(
-          nextStep.approver
-        );
+  const nextStep =
+    requisition.approvalChain[
+      requisition.currentStepIndex
+    ];
 
-      if (nextApprover) {
-        await sendApprovalStepEmail(
-          nextApprover,
-          requisition
-        );
-      }
+  if (nextStep?.approver) {
+    const nextApprover =
+      await User.findById(
+        nextStep.approver
+      );
+
+    if (nextApprover) {
+      await sendApprovalStepEmail(
+        nextApprover,
+        requisition
+      );
     }
   }
 
@@ -217,14 +313,11 @@ export async function approveStep({
 }
 
 /*
- * Return a requisition for clarification.
- *
- * If the current person is the first approval step,
- * it returns to the requester.
- *
- * Otherwise it goes back exactly one level in the
- * approval hierarchy.
- */
+|--------------------------------------------------------------------------
+| RETURN FOR CLARIFICATION
+|--------------------------------------------------------------------------
+*/
+
 export async function returnStep({
   requisitionId,
   approverUser,
@@ -236,12 +329,9 @@ export async function returnStep({
       approverUser.id
     );
 
-  const currentStepIndex =
-    requisition.currentStepIndex;
-
   const step =
     requisition.approvalChain[
-      currentStepIndex
+      requisition.currentStepIndex
     ];
 
   await Approval.create({
@@ -249,7 +339,7 @@ export async function returnStep({
       requisition._id,
 
     stepIndex:
-      currentStepIndex,
+      requisition.currentStepIndex,
 
     role:
       step.role,
@@ -263,19 +353,24 @@ export async function returnStep({
     comment,
   });
 
-  if (currentStepIndex === 0) {
-    /*
-     * First approver sends it back to requester.
-     */
+  /*
+   * First approver returns to requester.
+   */
+
+  if (
+    requisition.currentStepIndex === 0
+  ) {
     requisition.awaitingRequesterAction =
       true;
-  } else {
-    /*
-     * Otherwise return to the immediately
-     * preceding approval level.
-     */
-    requisition.currentStepIndex =
-      currentStepIndex - 1;
+  }
+
+  /*
+   * Otherwise return to previous
+   * approval authority.
+   */
+
+  else {
+    requisition.currentStepIndex -= 1;
 
     requisition.awaitingRequesterAction =
       false;
@@ -296,6 +391,10 @@ export async function returnStep({
 
   await requisition.save();
 
+  /*
+   * Audit
+   */
+
   await AuditLog.create({
     actor:
       approverUser.id,
@@ -310,17 +409,13 @@ export async function returnStep({
       requisition._id,
 
     details: {
-      fromStepIndex:
-        currentStepIndex,
-
-      returnedToStepIndex:
-        requisition.awaitingRequesterAction
-          ? null
-          : requisition.currentStepIndex,
-
       comment,
     },
   });
+
+  /*
+   * Notify requester.
+   */
 
   await sendRequisitionReturnedEmail(
     requisition.requester,
@@ -329,9 +424,11 @@ export async function returnStep({
   );
 
   /*
-   * If it was returned to another approver,
-   * notify that approver.
+   * Notify previous approver if
+   * the requisition did not go back
+   * all the way to requester.
    */
+
   if (
     !requisition.awaitingRequesterAction
   ) {
@@ -359,8 +456,11 @@ export async function returnStep({
 }
 
 /*
- * Reject a requisition.
- */
+|--------------------------------------------------------------------------
+| REJECT
+|--------------------------------------------------------------------------
+*/
+
 export async function rejectStep({
   requisitionId,
   approverUser,
@@ -373,12 +473,9 @@ export async function rejectStep({
       approverUser.id
     );
 
-  const currentStepIndex =
-    requisition.currentStepIndex;
-
   const step =
     requisition.approvalChain[
-      currentStepIndex
+      requisition.currentStepIndex
     ];
 
   await Approval.create({
@@ -386,7 +483,7 @@ export async function rejectStep({
       requisition._id,
 
     stepIndex:
-      currentStepIndex,
+      requisition.currentStepIndex,
 
     role:
       step.role,
@@ -400,10 +497,11 @@ export async function rejectStep({
     comment,
   });
 
+  /*
+   * Final rejection.
+   */
+
   if (isFinal) {
-    /*
-     * Final rejection.
-     */
     requisition.status =
       REQUISITION_STATUS.REJECTED;
 
@@ -412,19 +510,21 @@ export async function rejectStep({
 
     requisition.awaitingRequesterAction =
       false;
-  } else {
-    /*
-     * Rejection that allows requester to
-     * edit and submit again.
-     */
+  }
+
+  /*
+   * Rejection that allows requester
+   * to edit and resubmit.
+   */
+
+  else {
     requisition.status =
       REQUISITION_STATUS.RETURNED;
 
     requisition.awaitingRequesterAction =
       true;
 
-    requisition.currentStepIndex =
-      0;
+    requisition.currentStepIndex = 0;
   }
 
   if (comment) {
@@ -438,6 +538,10 @@ export async function rejectStep({
   }
 
   await requisition.save();
+
+  /*
+   * Audit
+   */
 
   await AuditLog.create({
     actor:
@@ -453,14 +557,7 @@ export async function rejectStep({
       requisition._id,
 
     details: {
-      stepIndex:
-        currentStepIndex,
-
-      role:
-        step.role,
-
       isFinal,
-
       comment,
     },
   });
@@ -472,4 +569,4 @@ export async function rejectStep({
   );
 
   return requisition;
-}
+  }
