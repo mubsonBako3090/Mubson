@@ -1,18 +1,23 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+
 import { verifyToken } from "@/lib/auth";
 import { connectDB } from "@/lib/db";
+
 import User from "@/models/User";
+import Requisition from "@/models/Requisition";
+
 import {
   submitRequisitionSchema,
 } from "@/lib/validators/requisition";
-import Requisition from "@/models/Requisition";
+
 import {
   submitRequisition,
 } from "@/services/requisitionService";
 
 function getAuth() {
-  const token = cookies().get("token")?.value;
+  const token =
+    cookies().get("token")?.value;
 
   return token
     ? verifyToken(token)
@@ -27,8 +32,12 @@ export async function POST(
 
   if (!auth) {
     return NextResponse.json(
-      { message: "Unauthorized" },
-      { status: 401 }
+      {
+        message: "Unauthorized",
+      },
+      {
+        status: 401,
+      }
     );
   }
 
@@ -47,19 +56,31 @@ export async function POST(
           message:
             "Requisition not found.",
         },
-        { status: 404 }
+        {
+          status: 404,
+        }
       );
     }
 
     /*
-     * Validate the requisition before submitting.
+     |--------------------------------------------------------------------------
+     | Validate complete requisition
+     |--------------------------------------------------------------------------
      */
+
     const { error } =
       submitRequisitionSchema.validate({
-        category: existing.category,
-        purpose: existing.purpose,
-        urgency: existing.urgency,
-        items: existing.items,
+        category:
+          existing.category,
+
+        purpose:
+          existing.purpose,
+
+        urgency:
+          existing.urgency,
+
+        items:
+          existing.items,
       });
 
     if (error) {
@@ -68,38 +89,49 @@ export async function POST(
           message:
             `Requisition is incomplete: ${error.details[0].message}`,
         },
-        { status: 400 }
+        {
+          status: 400,
+        }
       );
     }
 
     /*
-     * Get the complete creator record.
-     *
-     * We need the role because routing depends on who
-     * created the requisition.
+     |--------------------------------------------------------------------------
+     | Load requester
+     |--------------------------------------------------------------------------
      */
+
     const requesterUser =
-      await User.findById(auth.sub).lean();
+      await User.findById(
+        auth.sub
+      ).lean();
 
     if (!requesterUser) {
       return NextResponse.json(
         {
           message:
-            "Requesting user account not found.",
+            "Requester account not found.",
         },
-        { status: 404 }
+        {
+          status: 404,
+        }
       );
     }
 
     /*
-     * Submit using the creator's actual role.
+     |--------------------------------------------------------------------------
+     | Submit
+     |--------------------------------------------------------------------------
      */
+
     const requisition =
       await submitRequisition({
-        requisitionId: params.id,
+        requisitionId:
+          params.id,
 
         requesterUser: {
-          id: requesterUser._id,
+          id:
+            requesterUser._id,
 
           fullName:
             requesterUser.fullName,
@@ -121,14 +153,13 @@ export async function POST(
         },
       });
 
-    return NextResponse.json({
-      requisition,
-    });
-  } catch (err) {
-    console.error(
-      "Requisition submission error:",
-      err
+    return NextResponse.json(
+      {
+        requisition,
+      }
     );
+  } catch (err) {
+    console.error(err);
 
     return NextResponse.json(
       {
@@ -136,7 +167,9 @@ export async function POST(
           err.message ||
           "Submission failed.",
       },
-      { status: 400 }
+      {
+        status: 500,
+      }
     );
   }
-}
+    }
