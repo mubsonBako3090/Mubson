@@ -3,34 +3,112 @@ import { ALL_ROLES } from "@/constants/roles";
 
 const UserSchema = new mongoose.Schema(
   {
-    fullName: { type: String, required: true, trim: true },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    passwordHash: { type: String, required: true },
+    fullName: {
+      type: String,
+      required: true,
+      trim: true,
+    },
 
-    role: { type: String, enum: ALL_ROLES, required: true },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
 
-    // Organizational placement — every user is tied to this for routing.
-    collegeId: { type: String, required: true },
-    facultyId: { type: String, required: true },
-    department: { type: String, required: true },
+    passwordHash: {
+      type: String,
+      required: true,
+    },
 
-    // Self-registered users start "pending" until an admin approves them.
-    // Admin-invited users start "active" directly.
+    role: {
+      type: String,
+      enum: ALL_ROLES,
+      required: true,
+    },
+
+    /*
+    |--------------------------------------------------------------------------
+    | Organizational placement
+    |--------------------------------------------------------------------------
+    */
+
+    collegeId: {
+      type: String,
+      required: true,
+    },
+
+    facultyId: {
+      type: String,
+      required: true,
+    },
+
+    department: {
+      type: String,
+      required: true,
+    },
+
+    /*
+    |--------------------------------------------------------------------------
+    | Account status
+    |--------------------------------------------------------------------------
+    */
+
     accountStatus: {
       type: String,
-      enum: ["pending", "active", "deactivated"],
+
+      enum: [
+        "pending",
+        "active",
+        "deactivated",
+      ],
+
       default: "pending",
     },
 
-    // True only for the 2 hard-capped system administrator accounts.
-    isSystemAdmin: { type: Boolean, default: false },
+    /*
+    |--------------------------------------------------------------------------
+    | System administrator
+    |--------------------------------------------------------------------------
+    */
 
-    passwordResetToken: { type: String },
-    passwordResetExpires: { type: Date },
+    isSystemAdmin: {
+      type: Boolean,
+      default: false,
+    },
 
-    lastLoginAt: { type: Date },
+    /*
+    |--------------------------------------------------------------------------
+    | Password reset
+    |--------------------------------------------------------------------------
+    */
+
+    passwordResetToken: {
+      type: String,
+    },
+
+    passwordResetExpires: {
+      type: Date,
+    },
+
+    /*
+    |--------------------------------------------------------------------------
+    | Login
+    |--------------------------------------------------------------------------
+    */
+
+    lastLoginAt: {
+      type: Date,
+    },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+  }
 );
 
-export default mongoose.models.User || mongoose.model("User", UserSchema);
+export default mongoose.models.User ||
+  mongoose.model(
+    "User",
+    UserSchema
+  );
