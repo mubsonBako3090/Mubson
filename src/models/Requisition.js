@@ -92,8 +92,14 @@ const ApprovalChainStepSchema = new mongoose.Schema(
       ref: "User",
     },
 
-    // approval = must approve
-    // processing = informational/processing stage after final approval
+    /*
+     * approval:
+     *   The person must approve/reject/return.
+     *
+     * processing:
+     *   Informational processing stage.
+     *   Procurement does NOT approve the requisition.
+     */
     type: {
       type: String,
       enum: ["approval", "processing"],
@@ -117,14 +123,17 @@ const RequisitionSchema = new mongoose.Schema(
       required: true,
     },
 
-    // Snapshot of the user's role when the requisition was created.
-    // This is important because routing depends on who created the request.
+    /*
+     * Role of the user who created the requisition.
+     */
     requesterRole: {
       type: String,
       required: true,
     },
 
-    // Organizational snapshot at the time of submission.
+    /*
+     * Organisational snapshot.
+     */
     collegeId: {
       type: String,
       required: true,
@@ -172,6 +181,15 @@ const RequisitionSchema = new mongoose.Schema(
       default: [],
     },
 
+    /*
+     * Main requisition lifecycle.
+     *
+     * draft
+     * pending
+     * returned
+     * approved
+     * rejected
+     */
     status: {
       type: String,
       enum: Object.values(REQUISITION_STATUS),
@@ -179,33 +197,31 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
+     * Approval chain.
+     *
      * Example:
      *
-     * Requester:
      * HOD -> Dean -> Provost -> VC -> Procurement
      *
-     * Provost:
-     * VC -> Procurement
-     *
-     * VC:
-     * Procurement
-     *
-     * Procurement:
-     * VC -> Procurement
+     * Procurement is type "processing", not "approval".
      */
     approvalChain: {
       type: [ApprovalChainStepSchema],
       default: [],
     },
 
+    /*
+     * Index of the currently visible stage.
+     *
+     * After VC approval this points to Procurement.
+     */
     currentStepIndex: {
       type: Number,
       default: 0,
     },
 
     /*
-     * True when the requisition is waiting for the requester
-     * to edit and resubmit.
+     * True when requester must edit/resubmit.
      */
     awaitingRequesterAction: {
       type: Boolean,
@@ -213,8 +229,7 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * True when the requisition exceeds the configured
-     * escalation threshold.
+     * True when estimated cost exceeds escalation threshold.
      */
     requiresGovernorApproval: {
       type: Boolean,
@@ -222,41 +237,71 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * Indicates that VC has completed the final approval.
-     * Procurement can now commence processing.
+     * --------------------------------------------------
+     * FINAL APPROVAL
+     * --------------------------------------------------
+     *
+     * Set when VC gives final approval.
      */
     finalApprovalAt: {
       type: Date,
     },
 
     /*
-     * Indicates when the Procurement Officer took ownership
-     * of the post-approval processing stage.
+     * --------------------------------------------------
+     * PROCUREMENT PROCESSING
+     * --------------------------------------------------
+     *
+     * Procurement does NOT approve the requisition.
+     *
+     * It receives the requisition after VC approval.
+     *
+     * Values:
+     *
+     * ready
+     * processing
+     * completed
+     */
+    procurementStatus: {
+      type: String,
+      enum: [
+        "ready",
+        "processing",
+        "completed",
+      ],
+      default: undefined,
+    },
+
+    /*
+     * Procurement Officer assigned to process
+     * this requisition.
+     */
+    procurementOfficer: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
+    /*
+     * When Procurement received the requisition.
      */
     procurementReceivedAt: {
-  type: Date,
-},
+      type: Date,
+    },
 
-/*
- * Procurement processing status.
- *
- * This starts as "ready" when VC gives final approval
- * and the requisition reaches the Procurement Officer.
- */
-procurementStatus: {
-  type: String,
-  enum: ["ready", "processing", "completed"],
-  default: "ready",
-},
+    /*
+     * When Procurement started processing.
+     */
+    procurementStartedAt: {
+      type: Date,
+    },
 
-/*
- * Procurement Officer responsible for processing
- * the approved requisition.
- */
-procurementOfficer: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: "User",
-},
+    /*
+     * When Procurement completed processing.
+     */
+    procurementCompletedAt: {
+      type: Date,
+    },
+
     submittedAt: {
       type: Date,
     },
@@ -271,4 +316,7 @@ procurementOfficer: {
 );
 
 export default mongoose.models.Requisition ||
-  mongoose.model("Requisition", RequisitionSchema);
+  mongoose.model(
+    "Requisition",
+    RequisitionSchema
+  );
