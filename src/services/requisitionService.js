@@ -1,11 +1,15 @@
 import Requisition from "@/models/Requisition";
 import AuditLog from "@/models/AuditLog";
 import User from "@/models/User";
+
 import {
   buildApprovalChain,
   isEscalated,
+  resolveProcurementOfficer,
 } from "@/lib/routing";
+
 import { REQUISITION_STATUS } from "@/constants/requisitionOptions";
+
 import {
   sendRequisitionSubmittedEmail,
   sendApprovalStepEmail,
@@ -14,6 +18,7 @@ import {
 function computeItemTotals(items = []) {
   return items.map((item) => ({
     ...item,
+
     totalCost:
       Number(item.quantity || 0) *
       Number(item.unitCost || 0),
@@ -22,7 +27,8 @@ function computeItemTotals(items = []) {
 
 function sumEstimatedCost(items = []) {
   return items.reduce(
-    (sum, item) => sum + Number(item.totalCost || 0),
+    (sum, item) =>
+      sum + Number(item.totalCost || 0),
     0
   );
 }
@@ -41,14 +47,23 @@ async function generateRequisitionNumber() {
   return `KSU/REQ/${year}/${seq}`;
 }
 
-// Creates or updates a draft.
+/*
+|--------------------------------------------------------------------------
+| Save Draft
+|--------------------------------------------------------------------------
+*/
+
 export async function saveDraft({
   requisitionId,
   requesterUser,
   payload,
 }) {
-  const items = computeItemTotals(payload.items || []);
-  const estimatedCost = sumEstimatedCost(items);
+  const items = computeItemTotals(
+    payload.items || []
+  );
+
+  const estimatedCost =
+    sumEstimatedCost(items);
 
   const data = {
     category: payload.category,
@@ -60,46 +75,79 @@ export async function saveDraft({
 
   let requisition;
 
+  /*
+   * Existing draft
+   */
   if (requisitionId) {
-    requisition = await Requisition.findOneAndUpdate(
-      {
-        _id: requisitionId,
-        requester: requesterUser.id,
-        status: REQUISITION_STATUS.DRAFT,
-      },
-      {
-        $set: data,
-      },
-      {
-        new: true,
-      }
-    );
+    requisition =
+      await Requisition.findOneAndUpdate(
+        {
+          _id: requisitionId,
+          requester: requesterUser.id,
+
+          status: {
+            $in: [
+              REQUISITION_STATUS.DRAFT,
+              REQUISITION_STATUS.RETURNED,
+            ],
+          },
+        },
+
+        {
+          $set: data,
+        },
+
+        {
+          new: true,
+        }
+      );
 
     if (!requisition) {
       throw new Error(
         "Draft not found or not editable."
       );
     }
-  } else {
-    requisition = await Requisition.create({
-      ...data,
+  }
 
-      requester: requesterUser.id,
+  /*
+   * New draft
+   */
+  else {
+    requisition =
+      await Requisition.create({
+        ...data,
 
-      collegeId: requesterUser.collegeId,
-      facultyId: requesterUser.facultyId,
-      department: requesterUser.department,
+        requester: requesterUser.id,
 
-      status: REQUISITION_STATUS.DRAFT,
-    });
+        requesterRole:
+          requesterUser.role,
+
+        collegeId:
+          requesterUser.collegeId,
+
+        facultyId:
+          requesterUser.facultyId,
+
+        department:
+          requesterUser.department,
+
+        status:
+          REQUISITION_STATUS.DRAFT,
+
+        procurementStatus:
+          "not_received",
+      });
   }
 
   await AuditLog.create({
     actor: requesterUser.id,
+
     action: requisitionId
       ? "requisition.draft_update"
       : "requisition.draft_create",
+
     entityType: "Requisition",
+
     entityId: requisition._id,
   });
 
@@ -107,91 +155,158 @@ export async function saveDraft({
 }
 
 /*
- * Submit a requisition into its appropriate approval chain.
- */
+|--------------------------------------------------------------------------
+| Submit Requisition
+|--------------------------------------------------------------------------
+*/
+
 export async function submitRequisition({
   requisitionId,
   requesterUser,
 }) {
-  const requisition = await Requisition.findOne({
-    _id: requisitionId,
-    requester: requesterUser.id,
-  });
+  const requisition =
+    await Requisition.findOne({
+      _id: requisitionId,
+      requester: requesterUser.id,
+    });
 
   if (!requisition) {
-    throw new Error("Requisition not found.");
+    throw new Error(
+      "Requisition not found."
+    );
   }
 
   const isFreshDraft =
-    requisition.status === REQUISITION_STATUS.DRAFT;
+    requisition.status ===
+    REQUISITION_STATUS.DRAFT;
 
   const isReturnedToRequester =
-    requisition.status === REQUISITION_STATUS.RETURNED &&
+    requisition.status ===
+      REQUISITION_STATUS.RETURNED &&
     requisition.awaitingRequesterAction;
 
-  if (!isFreshDraft && !isReturnedToRequester) {
+  if (
+    !isFreshDraft &&
+    !isReturnedToRequester
+  ) {
     throw new Error(
       "This requisition is not awaiting your submission."
     );
   }
 
   /*
-   * IMPORTANT:
-   *
-   * The creator's role is now passed to buildApprovalChain().
-   *
-   * This prevents a Provost-created requisition from incorrectly
-   * returning to HOD, and prevents Procurement-created requisitions
-   * from starting at HOD.
+   |--------------------------------------------------------------------------
+   | Build approval chain
+   |--------------------------------------------------------------------------
    */
+
   const {
     chain,
     requiresGovernorApproval,
   } = await buildApprovalChain({
-    creatorRole: requesterUser.role,
+    requesterRole:
+      requesterUser.role,
 
-    collegeId: requisition.collegeId,
-    facultyId: requisition.facultyId,
-    department: requisition.department,
+    collegeId:
+      requisition.collegeId,
 
-    estimatedCost: requisition.estimatedCost,
+    facultyId:
+      requisition.facultyId,
+
+    department:
+      requisition.department,
+
+    estimatedCost:
+      requisition.estimatedCost,
   });
 
-  if (!chain.length) {
-    throw new Error(
-      "No approval route could be created for this requisition."
-    );
-  }
+  /*
+   |--------------------------------------------------------------------------
+   | Find Procurement Officer
+   |--------------------------------------------------------------------------
+   */
+
+  const procurementOfficer =
+    await resolveProcurementOfficer();
 
   /*
-   * Make sure every required approval step has an assigned user.
-   *
-   * This prevents a requisition from becoming permanently stuck
-   * because the appropriate officer does not exist.
+   |--------------------------------------------------------------------------
+   | Save approval chain
+   |--------------------------------------------------------------------------
    */
-  const missingApprover = chain.find(
-    (step) => !step.approver
-  );
 
-  if (missingApprover) {
-    throw new Error(
-      `No active ${missingApprover.role} is currently assigned to approve this requisition.`
-    );
-  }
-
-  requisition.approvalChain = chain;
+  requisition.approvalChain =
+    chain;
 
   requisition.requiresGovernorApproval =
     requiresGovernorApproval;
 
   requisition.currentStepIndex = 0;
 
-  requisition.awaitingRequesterAction = false;
+  requisition.awaitingRequesterAction =
+    false;
 
-  requisition.status =
-    REQUISITION_STATUS.PENDING;
+  /*
+   |--------------------------------------------------------------------------
+   | Procurement information
+   |--------------------------------------------------------------------------
+   */
 
-  requisition.submittedAt = new Date();
+  requisition.procurementOfficer =
+    procurementOfficer
+      ? procurementOfficer._id
+      : undefined;
+
+  /*
+   |--------------------------------------------------------------------------
+   | Special case:
+   |
+   | VC creates the requisition.
+   |
+   | Since VC is the final authority,
+   | no approval step is necessary.
+   |
+   */
+
+  if (chain.length === 0) {
+    requisition.status =
+      REQUISITION_STATUS.APPROVED;
+
+    requisition.decidedAt =
+      new Date();
+
+    requisition.procurementStatus =
+      "received";
+
+    requisition.procurementReceivedAt =
+      new Date();
+
+    requisition.submittedAt =
+      new Date();
+  }
+
+  /*
+   |--------------------------------------------------------------------------
+   | Normal approval workflow
+   |--------------------------------------------------------------------------
+   */
+
+  else {
+    requisition.status =
+      REQUISITION_STATUS.PENDING;
+
+    requisition.submittedAt =
+      new Date();
+
+    requisition.procurementStatus =
+      "not_received";
+  }
+
+  /*
+   |--------------------------------------------------------------------------
+   | Generate requisition number
+   |--------------------------------------------------------------------------
+   */
 
   if (!requisition.requisitionNumber) {
     requisition.requisitionNumber =
@@ -200,22 +315,43 @@ export async function submitRequisition({
 
   await requisition.save();
 
+  /*
+   |--------------------------------------------------------------------------
+   | Audit
+   |--------------------------------------------------------------------------
+   */
+
   await AuditLog.create({
     actor: requesterUser.id,
-    action: "requisition.submit",
-    entityType: "Requisition",
-    entityId: requisition._id,
+
+    action:
+      "requisition.submit",
+
+    entityType:
+      "Requisition",
+
+    entityId:
+      requisition._id,
 
     details: {
-      creatorRole: requesterUser.role,
       requiresGovernorApproval,
-      approvalChain: chain.map((step) => ({
-        role: step.role,
-        approver: step.approver,
-      })),
-      resubmission: isReturnedToRequester,
+
+      resubmission:
+        isReturnedToRequester,
+
+      requesterRole:
+        requesterUser.role,
+
+      approvalSteps:
+        chain.map((step) => step.role),
     },
   });
+
+  /*
+   |--------------------------------------------------------------------------
+   | Email requester
+   |--------------------------------------------------------------------------
+   */
 
   await sendRequisitionSubmittedEmail(
     requesterUser,
@@ -223,22 +359,55 @@ export async function submitRequisition({
   );
 
   /*
-   * Notify the FIRST person in the approval chain.
+   |--------------------------------------------------------------------------
+   | If there is an approval step,
+   | notify first approver.
+   |--------------------------------------------------------------------------
    */
-  const firstStep = chain[0];
 
-  if (firstStep?.approver) {
-    const approver = await User.findById(
-      firstStep.approver
-    );
+  if (chain.length > 0) {
+    const firstStep =
+      chain[0];
 
-    if (approver) {
-      await sendApprovalStepEmail(
-        approver,
-        requisition
-      );
+    if (firstStep?.approver) {
+      const approver =
+        await User.findById(
+          firstStep.approver
+        );
+
+      if (approver) {
+        await sendApprovalStepEmail(
+          approver,
+          requisition
+        );
+      }
     }
   }
+
+  /*
+   |--------------------------------------------------------------------------
+   | If VC created it or there are no approval steps,
+   | notify Procurement immediately.
+   |--------------------------------------------------------------------------
+   */
+
+  else if (procurementOfficer) {
+    await sendApprovalStepEmail(
+      procurementOfficer,
+      requisition
+    );
+  }
+
+  /*
+   |--------------------------------------------------------------------------
+   | Procurement-created requisition:
+   |
+   | chain = VC
+   |
+   | After VC approves, approvalService
+   | sends it back to Procurement.
+   |--------------------------------------------------------------------------
+   */
 
   return requisition;
 }
@@ -246,5 +415,7 @@ export async function submitRequisition({
 export function isRequisitionEscalated(
   estimatedCost
 ) {
-  return isEscalated(estimatedCost);
-      }
+  return isEscalated(
+    estimatedCost
+  );
+}
