@@ -63,12 +63,11 @@ export async function POST(
     }
 
     /*
-     |--------------------------------------------------------------------------
-     | Validate complete requisition
-     |--------------------------------------------------------------------------
+     * Validate the completed requisition.
      */
-
-    const { error } =
+    const {
+      error,
+    } =
       submitRequisitionSchema.validate({
         category:
           existing.category,
@@ -95,12 +94,6 @@ export async function POST(
       );
     }
 
-    /*
-     |--------------------------------------------------------------------------
-     | Load requester
-     |--------------------------------------------------------------------------
-     */
-
     const requesterUser =
       await User.findById(
         auth.sub
@@ -119,19 +112,16 @@ export async function POST(
     }
 
     /*
-     |--------------------------------------------------------------------------
-     | Submit
-     |--------------------------------------------------------------------------
+     * Pass the complete authenticated user
+     * information to the service.
      */
-
     const requisition =
       await submitRequisition({
         requisitionId:
           params.id,
 
         requesterUser: {
-          id:
-            requesterUser._id,
+          id: auth.sub,
 
           fullName:
             requesterUser.fullName,
@@ -153,11 +143,9 @@ export async function POST(
         },
       });
 
-    return NextResponse.json(
-      {
-        requisition,
-      }
-    );
+    return NextResponse.json({
+      requisition,
+    });
   } catch (err) {
     console.error(err);
 
@@ -172,4 +160,4 @@ export async function POST(
       }
     );
   }
-    }
+        }
