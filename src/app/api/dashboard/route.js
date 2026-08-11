@@ -19,19 +19,22 @@ import {
 } from "@/constants/roles";
 
 /*
- * Get the currently authenticated user from the JWT cookie.
+ * Get authenticated user.
  */
 function getAuth() {
-  const token = cookies().get("token")?.value;
+  const token =
+    cookies().get("token")?.value;
 
-  return token ? verifyToken(token) : null;
+  return token
+    ? verifyToken(token)
+    : null;
 }
 
 /*
  * GET /api/dashboard
  *
- * Returns dashboard statistics according to the
- * currently logged-in user's role.
+ * Returns statistics according to
+ * the logged-in user's role.
  */
 export async function GET() {
   try {
@@ -39,22 +42,27 @@ export async function GET() {
 
     if (!auth) {
       return NextResponse.json(
-        { message: "Unauthorized" },
-        { status: 401 }
+        {
+          message:
+            "Unauthorized",
+        },
+        {
+          status: 401,
+        }
       );
     }
 
     await connectDB();
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * REQUESTER DASHBOARD
-     * --------------------------------------------------
-     *
-     * Requesters only see statistics for requisitions
-     * that they created.
+     * ==================================================
      */
-    if (auth.role === ROLES.REQUESTER) {
+    if (
+      auth.role ===
+      ROLES.REQUESTER
+    ) {
       const requesterFilter = {
         requester: auth.sub,
       };
@@ -69,27 +77,32 @@ export async function GET() {
       ] = await Promise.all([
         Requisition.countDocuments({
           ...requesterFilter,
-          status: REQUISITION_STATUS.DRAFT,
+          status:
+            REQUISITION_STATUS.DRAFT,
         }),
 
         Requisition.countDocuments({
           ...requesterFilter,
-          status: REQUISITION_STATUS.PENDING,
+          status:
+            REQUISITION_STATUS.PENDING,
         }),
 
         Requisition.countDocuments({
           ...requesterFilter,
-          status: REQUISITION_STATUS.RETURNED,
+          status:
+            REQUISITION_STATUS.RETURNED,
         }),
 
         Requisition.countDocuments({
           ...requesterFilter,
-          status: REQUISITION_STATUS.APPROVED,
+          status:
+            REQUISITION_STATUS.APPROVED,
         }),
 
         Requisition.countDocuments({
           ...requesterFilter,
-          status: REQUISITION_STATUS.REJECTED,
+          status:
+            REQUISITION_STATUS.REJECTED,
         }),
 
         Requisition.countDocuments(
@@ -105,71 +118,78 @@ export async function GET() {
         returnedCount,
         approvedCount,
         rejectedCount,
-
         totalCount,
       });
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * APPROVER DASHBOARD
-     * --------------------------------------------------
-     *
-     * Applies to:
+     * ==================================================
      *
      * HOD
      * Dean
      * Provost
      * VC
-     *
-     * "Awaiting Your Approval" uses the exact same
-     * current-step logic as /api/approvals.
      */
-    if (APPROVER_ROLES.includes(auth.role)) {
+    if (
+      APPROVER_ROLES.includes(
+        auth.role
+      )
+    ) {
       /*
-       * Find requisitions that are currently waiting
-       * for this specific approver.
+       * Find requisitions where this user
+       * appears somewhere in the chain.
        */
-      const possiblePending = await Requisition.find({
-        status: {
-          $in: [
-            REQUISITION_STATUS.PENDING,
-            REQUISITION_STATUS.RETURNED,
-          ],
-        },
+      const possiblePending =
+        await Requisition.find({
+          status: {
+            $in: [
+              REQUISITION_STATUS.PENDING,
+              REQUISITION_STATUS.RETURNED,
+            ],
+          },
 
-        awaitingRequesterAction: {
-          $ne: true,
-        },
+          awaitingRequesterAction: {
+            $ne: true,
+          },
 
-        "approvalChain.approver": auth.sub,
-      })
-        .select(
-          "_id currentStepIndex approvalChain status awaitingRequesterAction"
-        )
-        .lean();
+          "approvalChain.approver":
+            auth.sub,
+        })
+          .select(
+            "_id currentStepIndex approvalChain status awaitingRequesterAction"
+          )
+          .lean();
 
       /*
-       * Narrow the results to only requisitions where
-       * this user's step is the CURRENT step.
+       * Only count requisitions where
+       * this user is CURRENTLY responsible.
        */
       const pendingMyStep =
-        possiblePending.filter((requisition) => {
-          const currentStep =
-            requisition.approvalChain[
-              requisition.currentStepIndex
-            ];
+        possiblePending.filter(
+          (requisition) => {
+            const currentStep =
+              requisition
+                .approvalChain[
+                requisition
+                  .currentStepIndex
+              ];
 
-          return (
-            currentStep &&
-            String(currentStep.approver) ===
-              String(auth.sub) &&
-            currentStep.type === "approval"
-          );
-        }).length;
+            return (
+              currentStep &&
+              String(
+                currentStep.approver
+              ) ===
+                String(auth.sub) &&
+              currentStep.type ===
+                "approval"
+            );
+          }
+        ).length;
 
       /*
-       * Historical actions performed by this approver.
+       * Historical actions.
        */
       const [
         approvedByMe,
@@ -178,24 +198,23 @@ export async function GET() {
       ] = await Promise.all([
         Approval.countDocuments({
           approver: auth.sub,
-          action: APPROVAL_ACTIONS.APPROVE,
+          action:
+            APPROVAL_ACTIONS.APPROVE,
         }),
 
         Approval.countDocuments({
           approver: auth.sub,
-          action: APPROVAL_ACTIONS.RETURN,
+          action:
+            APPROVAL_ACTIONS.RETURN,
         }),
 
         Approval.countDocuments({
           approver: auth.sub,
-          action: APPROVAL_ACTIONS.REJECT,
+          action:
+            APPROVAL_ACTIONS.REJECT,
         }),
       ]);
 
-      /*
-       * Total number of requisitions this approver
-       * has ever handled.
-       */
       const reviewedByMe =
         await Approval.countDocuments({
           approver: auth.sub,
@@ -215,121 +234,95 @@ export async function GET() {
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * PROCUREMENT DASHBOARD
-     * --------------------------------------------------
+     * ==================================================
      *
      * Procurement is NOT an approval authority.
      *
-     * VC approval changes the requisition status to
-     * APPROVED and moves currentStepIndex to the
-     * Procurement processing stage.
-     *
-     * Therefore we identify requisitions ready for
-     * Procurement using:
+     * VC approval creates:
      *
      * status = approved
-     * finalApprovalAt exists
-     * current step = procurement
+     * procurementStatus = ready
+     * procurementOfficer = assigned officer
+     *
+     * ==================================================
      */
-    if (auth.role === ROLES.PROCUREMENT) {
-  const [
-    readyForProcurement,
-    processingCount,
-    completedCount,
-  ] = await Promise.all([
-    Requisition.countDocuments({
-      status: REQUISITION_STATUS.APPROVED,
-      procurementStatus: "ready",
-      procurementOfficer: auth.sub,
-    }),
-
-    Requisition.countDocuments({
-      status: REQUISITION_STATUS.APPROVED,
-      procurementStatus: "processing",
-      procurementOfficer: auth.sub,
-    }),
-
-    Requisition.countDocuments({
-      status: REQUISITION_STATUS.APPROVED,
-      procurementStatus: "completed",
-      procurementOfficer: auth.sub,
-    }),
-  ]);
-
-  return NextResponse.json({
-    role: auth.role,
-
-    readyForProcurement,
-    processingCount,
-    completedCount,
-
-    totalProcurementItems:
-      readyForProcurement +
-      processingCount +
-      completedCount,
-  });
-    }
-
-      /*
-       * Only count requisitions whose CURRENT stage
-       * is Procurement.
-       */
-      const readyForProcurement =
-        approvedRequisitions.filter(
-          (requisition) => {
-            const currentStep =
-              requisition.approvalChain[
-                requisition.currentStepIndex
-              ];
-
-            return (
-              currentStep &&
-              currentStep.role ===
-                ROLES.PROCUREMENT &&
-              currentStep.type === "processing"
-            );
-          }
-        ).length;
-
-      /*
-       * Total approved requisitions currently
-       * available to Procurement.
-       */
-      const totalApproved =
-        await Requisition.countDocuments({
+    if (
+      auth.role ===
+      ROLES.PROCUREMENT
+    ) {
+      const [
+        readyForProcurement,
+        processingCount,
+        completedCount,
+      ] = await Promise.all([
+        /*
+         * Ready to be processed.
+         */
+        Requisition.countDocuments({
           status:
             REQUISITION_STATUS.APPROVED,
 
-          finalApprovalAt: {
-            $exists: true,
-          },
-        });
+          procurementStatus:
+            "ready",
+
+          procurementOfficer:
+            auth.sub,
+        }),
+
+        /*
+         * Currently being processed.
+         */
+        Requisition.countDocuments({
+          status:
+            REQUISITION_STATUS.APPROVED,
+
+          procurementStatus:
+            "processing",
+
+          procurementOfficer:
+            auth.sub,
+        }),
+
+        /*
+         * Processing completed.
+         */
+        Requisition.countDocuments({
+          status:
+            REQUISITION_STATUS.APPROVED,
+
+          procurementStatus:
+            "completed",
+
+          procurementOfficer:
+            auth.sub,
+        }),
+      ]);
 
       return NextResponse.json({
         role: auth.role,
 
         readyForProcurement,
+        processingCount,
+        completedCount,
 
-        /*
-         * These are included for future Procurement
-         * processing functionality.
-         */
-        totalApproved,
-
-        processingCount: 0,
-        completedCount: 0,
+        totalProcurementItems:
+          readyForProcurement +
+          processingCount +
+          completedCount,
       });
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * ADMIN DASHBOARD
-     * --------------------------------------------------
-     *
-     * Admin sees university-wide statistics.
+     * ==================================================
      */
-    if (auth.role === ROLES.ADMIN) {
+    if (
+      auth.role ===
+      ROLES.ADMIN
+    ) {
       const [
         totalUsers,
         pendingUsers,
@@ -351,15 +344,18 @@ export async function GET() {
         User.countDocuments(),
 
         User.countDocuments({
-          accountStatus: "pending",
+          accountStatus:
+            "pending",
         }),
 
         User.countDocuments({
-          accountStatus: "active",
+          accountStatus:
+            "active",
         }),
 
         User.countDocuments({
-          accountStatus: "deactivated",
+          accountStatus:
+            "deactivated",
         }),
 
         /*
@@ -377,40 +373,39 @@ export async function GET() {
         }),
 
         Requisition.countDocuments({
-          status: REQUISITION_STATUS.DRAFT,
+          status:
+            REQUISITION_STATUS.DRAFT,
         }),
 
         Requisition.countDocuments({
-          status: REQUISITION_STATUS.PENDING,
+          status:
+            REQUISITION_STATUS.PENDING,
         }),
 
         Requisition.countDocuments({
-          status: REQUISITION_STATUS.RETURNED,
+          status:
+            REQUISITION_STATUS.RETURNED,
         }),
 
         Requisition.countDocuments({
-          status: REQUISITION_STATUS.APPROVED,
+          status:
+            REQUISITION_STATUS.APPROVED,
         }),
 
         Requisition.countDocuments({
-          status: REQUISITION_STATUS.REJECTED,
+          status:
+            REQUISITION_STATUS.REJECTED,
         }),
       ]);
 
       return NextResponse.json({
         role: auth.role,
 
-        /*
-         * User statistics
-         */
         totalUsers,
         pendingUsers,
         activeUsers,
         deactivatedUsers,
 
-        /*
-         * Requisition statistics
-         */
         totalRequisitions,
         activeRequisitions,
 
@@ -423,16 +418,18 @@ export async function GET() {
     }
 
     /*
-     * --------------------------------------------------
+     * ==================================================
      * UNKNOWN ROLE
-     * --------------------------------------------------
+     * ==================================================
      */
     return NextResponse.json(
       {
         message:
           "No dashboard statistics are configured for this role.",
       },
-      { status: 403 }
+      {
+        status: 403,
+      }
     );
   } catch (error) {
     console.error(
@@ -446,7 +443,9 @@ export async function GET() {
           error.message ||
           "Failed to load dashboard statistics.",
       },
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
-    }
+        }
