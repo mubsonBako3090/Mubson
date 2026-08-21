@@ -1,67 +1,76 @@
 import Joi from "joi";
+
 import {
   REQUISITION_CATEGORIES,
   URGENCY_LEVELS,
 } from "@/constants/requisitionOptions";
 
-const urgencyValues = URGENCY_LEVELS.map(
-  (u) => u.value
-);
+const urgencyValues =
+  URGENCY_LEVELS.map(
+    (u) => u.value
+  );
 
 /*
- * Item validation used when submitting
- * a completed requisition.
- *
- * totalCost is included because items saved
- * in MongoDB already contain the calculated
- * totalCost value.
+ * --------------------------------------------------
+ * ITEM SCHEMAS
+ * --------------------------------------------------
  */
-const itemSchema = Joi.object({
-  name: Joi.string().required(),
 
-  quantity: Joi.number()
-    .min(1)
-    .required(),
+const itemSchema =
+  Joi.object({
+    name: Joi.string()
+      .required(),
 
-  unitCost: Joi.number()
-    .min(0)
-    .required(),
+    quantity: Joi.number()
+      .min(1)
+      .required(),
 
-  totalCost: Joi.number()
-    .min(0)
-    .required(),
-});
+    unitCost: Joi.number()
+      .min(0)
+      .required(),
+
+    totalCost: Joi.number()
+      .min(0)
+      .required(),
+  });
+
+const draftItemSchema =
+  Joi.object({
+    name: Joi.string()
+      .allow(""),
+
+    quantity: Joi.number()
+      .min(0)
+      .allow(null),
+
+    unitCost: Joi.number()
+      .min(0)
+      .allow(null),
+
+    totalCost: Joi.number()
+      .min(0)
+      .allow(null),
+  });
 
 /*
- * Item validation used while saving a draft.
+ * --------------------------------------------------
+ * DRAFT
+ * --------------------------------------------------
  *
- * Drafts can be incomplete, so all fields are
- * optional. totalCost is also accepted because
- * it may already exist on an item loaded from
- * MongoDB.
+ * Organizational fields are optional while
+ * drafting because a user may save progress
+ * before completing the first step.
+ *
+ * Procurement must complete them before
+ * submission.
  */
-const draftItemSchema = Joi.object({
-  name: Joi.string().allow(""),
 
-  quantity: Joi.number()
-    .min(0)
-    .allow(null),
-
-  unitCost: Joi.number()
-    .min(0)
-    .allow(null),
-
-  totalCost: Joi.number()
-    .min(0)
-    .allow(null),
-});
-
-// Draft: everything optional, allowing partial
-// progress through the requisition wizard.
 export const draftRequisitionSchema =
   Joi.object({
     category: Joi.string()
-      .valid(...REQUISITION_CATEGORIES)
+      .valid(
+        ...REQUISITION_CATEGORIES
+      )
       .allow(null, ""),
 
     purpose: Joi.string()
@@ -71,17 +80,34 @@ export const draftRequisitionSchema =
       .valid(...urgencyValues)
       .allow(null, ""),
 
-    items: Joi.array().items(
-      draftItemSchema
-    ),
+    items: Joi.array()
+      .items(draftItemSchema),
+
+    /*
+     * Procurement requesting organization.
+     */
+    collegeId: Joi.string()
+      .allow(null, ""),
+
+    facultyId: Joi.string()
+      .allow(null, ""),
+
+    department: Joi.string()
+      .allow(null, ""),
   });
 
-// Submit: full validation. A requisition must
-// be complete before entering the approval chain.
+/*
+ * --------------------------------------------------
+ * SUBMISSION
+ * --------------------------------------------------
+ */
+
 export const submitRequisitionSchema =
   Joi.object({
     category: Joi.string()
-      .valid(...REQUISITION_CATEGORIES)
+      .valid(
+        ...REQUISITION_CATEGORIES
+      )
       .required(),
 
     purpose: Joi.string()
@@ -96,7 +122,26 @@ export const submitRequisitionSchema =
       .items(itemSchema)
       .min(1)
       .required(),
+
+    /*
+     * These are checked separately by the
+     * requisition service according to role.
+     */
+    collegeId: Joi.string()
+      .allow(null, ""),
+
+    facultyId: Joi.string()
+      .allow(null, ""),
+
+    department: Joi.string()
+      .allow(null, ""),
   });
+
+/*
+ * --------------------------------------------------
+ * APPROVAL ACTIONS
+ * --------------------------------------------------
+ */
 
 export const approvalActionSchema =
   Joi.object({
