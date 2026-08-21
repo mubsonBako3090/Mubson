@@ -34,39 +34,66 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status");
 
-  // Base query: always show the user's own requisitions
+  /*
+   * --------------------------------------------------
+   * REQUISITION VISIBILITY
+   * --------------------------------------------------
+   *
+   * The normal Requisitions page shows ONLY requisitions
+   * created by the currently logged-in user.
+   *
+   * Approval work is handled separately through:
+   *
+   *     /api/approvals
+   *
+   * Consolidated requisitions will also be handled
+   * separately when we implement the batch system.
+   */
+
   let query = {
-    $or: [{ requester: auth.sub }],
+    requester: auth.sub,
   };
 
-  // If the user is NOT a plain "REQUESTER", also show all submitted requisitions (excluding drafts)
-  if (auth.role !== ROLES.REQUESTER) {
-    query.$or.push({ status: { $ne: "draft" } });
+  /*
+   * Optional status filter.
+   *
+   * Example:
+   *
+   * /requisitions?status=draft
+   *
+   * will show only THIS USER'S drafts.
+   *
+   * /requisitions?status=approved
+   *
+   * will show only THIS USER'S approved requisitions.
+   */
+  if (status) {
+    query.status = status;
   }
 
-  // If a status filter is provided in the URL, override the above logic
-  if (status) {
-    // Replace the query with a simple status filter, but keep the requester filter?
-    // Typically, if a user asks for ?status=approved, they want to see all approved,
-    // not just their own. So we remove the $or and apply a combined filter if needed.
-    // For simplicity, we'll keep the $or and add an additional status condition.
-    // But to respect the status param exactly, we can rebuild:
-    if (auth.role === ROLES.REQUESTER) {
-      // Requesters see only their own with that status
-      query = { requester: auth.sub, status };
-    } else {
-      // Other roles see all with that status (excluding drafts if they want? 
-      // They might want to see drafts if they ask explicitly, so we allow)
-      query = { status };
+  /*
+   * Admin is the only role that should have
+   * university-wide visibility from this page.
+   */
+  if (auth.role === ROLES.ADMIN) {
+    query = {};
+
+    if (status) {
+      query.status = status;
     }
   }
 
   const requisitions = await Requisition.find(query)
     .sort({ createdAt: -1 })
-    .populate("requester", "fullName email role")
+    .populate(
+      "requester",
+      "fullName email role"
+    )
     .lean();
 
-  return NextResponse.json({ requisitions });
+  return NextResponse.json({
+    requisitions,
+  });
 }
 
 // --------------------------------------------
@@ -88,7 +115,7 @@ export async function POST(request) {
     ROLES.HOD,
     ROLES.DEAN,
     ROLES.PROVOST,
-    ROLES.ADMIN,
+    ROLES.PROCUREMENT,
     // Add any other roles that should be able to create
   ];
 
