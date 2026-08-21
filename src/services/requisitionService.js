@@ -564,6 +564,452 @@ export async function submitRequisition({
   return requisition;
 }
 
+/*
+ * --------------------------------------------------
+ * CREATE CONSOLIDATED REQUISITION
+ * --------------------------------------------------
+ *
+ * Used by:
+ *
+ * Dean
+ * Provost
+ * VC
+ * Procurement
+ *
+ * A consolidated requisition combines the items from
+ * multiple existing requisitions into ONE requisition.
+ *
+ * IMPORTANT:
+ *
+ * The original requisitions are NOT deleted.
+ *
+ * Each copied item keeps:
+ *
+ * College
+ * Faculty
+ * Department
+ * Quantity
+ *
+ * through the requesting* fields on ItemSchema.
+ */
+export async function createConsolidatedRequisition({
+  requisitionIds,
+  creatorUser,
+  purpose,
+  urgency,
+}) {
+  /*
+   * --------------------------------------------------
+   * VALIDATE INPUT
+   * --------------------------------------------------
+   */
+
+  if (
+    !Array.isArray(requisitionIds) ||
+    requisitionIds.length === 0
+  ) {
+    throw new Error(
+      "At least one requisition must be selected."
+    );
+  }
+
+  /*
+   * Prevent duplicate IDs.
+   */
+  const uniqueIds = [
+    ...new Set(
+      requisitionIds.map((id) =>
+        String(id)
+      )
+    ),
+  ];
+
+  /*
+   * --------------------------------------------------
+   * LOAD SOURCE REQUISITIONS
+   * --------------------------------------------------
+   */
+
+  const sourceRequisitions =
+    await Requisition.find({
+      _id: {
+        $in: uniqueIds,
+      },
+    }).lean();
+
+  if (
+    sourceRequisitions.length !==
+    uniqueIds.length
+  ) {
+    throw new Error(
+      "One or more selected requisitions could not be found."
+    );
+  }
+
+  /*
+   * --------------------------------------------------
+   * VALIDATE SOURCE REQUISITIONS
+   * --------------------------------------------------
+   *
+   * Only submitted/approved requisitions should
+   * become part of a consolidated requisition.
+   *
+   * Drafts must never be consolidated.
+   */
+
+  for (const requisition of sourceRequisitions) {
+    if (
+      requisition.status ===
+      REQUISITION_STATUS.DRAFT
+    ) {
+      throw new Error(
+        `Requisition ${
+          requisition.requisitionNumber ||
+          requisition._id
+        } is still a draft and cannot be consolidated.`
+      );
+    }
+
+    /*
+     * Do not allow an already consolidated
+     * requisition to be consolidated again.
+     */
+    if (requisition.isConsolidated) {
+      throw new Error(
+        `Requisition ${
+          requisition.requisitionNumber ||
+          requisition._id
+        } has already been consolidated.`
+      );
+    }
+  }
+
+  /*
+   * --------------------------------------------------
+   * BUILD CONSOLIDATED ITEMS
+   * --------------------------------------------------
+   *
+   * Every item receives the organizational
+   * information from its original requisition.
+   */
+
+  const consolidatedItems = [];
+
+  for (const requisition of sourceRequisitions) {
+    for (const item of requisition.items || []) {
+      consolidatedItems.push({
+        name: item.name,
+
+        requestingCollegeId:
+          requisition.collegeId,
+
+        requestingFacultyId:
+          requisition.facultyId,
+
+        requestingDepartment:
+          requisition.department,
+
+        quantity:
+          Number(item.quantity || 0),
+
+        unitCost:
+          Number(item.unitCost || 0),
+
+        totalCost:
+          Number(item.quantity || 0) *
+          Number(item.unitCost || 0),
+      });
+    }
+  }
+
+  if (
+    consolidatedItems.length === 0
+  ) {
+    throw new Error(
+      "The selected requisitions contain no items."
+    );
+  }
+
+  /*
+   * --------------------------------------------------
+   * CALCULATE TOTAL COST
+   * --------------------------------------------------
+   */
+
+  const estimatedCost =
+    sumEstimatedCost(
+      consolidatedItems
+    );
+
+  /*
+   * --------------------------------------------------
+   * BUILD REQUESTING UNITS
+   * --------------------------------------------------
+   *
+   * Remove duplicate organizational units.
+   */
+
+  const unitMap = new Map();
+
+  for (const requisition of sourceRequisitions) {
+    const key = [
+      requisition.collegeId || "",
+      requisition.facultyId || "",
+      requisition.department || "",
+    ].join("|");
+
+    if (!unitMap.has(key)) {
+      unitMap.set(key, {
+        collegeId:
+          requisition.collegeId,
+
+        facultyId:
+          requisition.facultyId,
+
+        department:
+          requisition.department,
+      });
+    }
+  }
+
+  const requestingUnits = [
+    ...unitMap.values(),
+  ];
+
+  /*
+   * --------------------------------------------------
+   * DETERMINE CATEGORY
+   * --------------------------------------------------
+   *
+   * If all source requisitions have the same
+   * category, preserve it.
+   *
+   * Otherwise use "Other".
+   */
+
+  const categories = [
+    ...new Set(
+      sourceRequisitions
+        .map(
+          (r) => r.category
+        )
+        .filter(Boolean)
+    ),
+  ];
+
+  const category =
+    categories.length === 1
+      ? categories[0]
+      : "Other";
+
+  /*
+   * --------------------------------------------------
+   * DETERMINE URGENCY
+   * --------------------------------------------------
+   *
+   * Use the highest urgency among the source
+   * requisitions.
+   */
+
+  const urgencyPriority = {
+    low: 1,
+    normal: 2,
+    high: 3,
+    urgent: 4,
+  };
+
+  const sourceUrgencies =
+    sourceRequisitions
+      .map(
+        (r) => r.urgency
+      )
+      .filter(Boolean);
+
+  let consolidatedUrgency =
+    urgency || "normal";
+
+  if (
+    !urgency &&
+    sourceUrgencies.length > 0
+  ) {
+    consolidatedUrgency =
+      sourceUrgencies.reduce(
+        (highest, current) =>
+          (urgencyPriority[current] || 0) >
+          (urgencyPriority[highest] || 0)
+            ? current
+            : highest,
+        "low"
+      );
+  }
+
+  /*
+   * --------------------------------------------------
+   * PURPOSE
+   * --------------------------------------------------
+   */
+
+  const consolidatedPurpose =
+    purpose ||
+    `Consolidated requirements from ${sourceRequisitions.length} requisition(s).`;
+
+  /*
+   * --------------------------------------------------
+   * ORGANIZATION FOR CONSOLIDATED RECORD
+   * --------------------------------------------------
+   *
+   * There is no single college/faculty/department
+   * because multiple units may be represented.
+   */
+
+  /*
+   * --------------------------------------------------
+   * CREATE CONSOLIDATED REQUISITION
+   * --------------------------------------------------
+   */
+
+  const consolidated =
+    await Requisition.create({
+      requester:
+        creatorUser.id,
+
+      requesterRole:
+        creatorUser.role,
+
+      isConsolidated:
+        true,
+
+      sourceRequisitions:
+        sourceRequisitions.map(
+          (r) => r._id
+        ),
+
+      consolidatedBy:
+        creatorUser.id,
+
+      requestingUnits,
+
+      /*
+       * These are intentionally not used for
+       * consolidated requisitions.
+       */
+      collegeId: undefined,
+      facultyId: undefined,
+      department: undefined,
+
+      category,
+
+      purpose:
+        consolidatedPurpose,
+
+      urgency:
+        consolidatedUrgency,
+
+      items:
+        consolidatedItems,
+
+      estimatedCost,
+
+      status:
+        REQUISITION_STATUS.DRAFT,
+    });
+
+  /*
+   * --------------------------------------------------
+   * AUDIT LOG
+   * --------------------------------------------------
+   */
+
+  await AuditLog.create({
+    actor:
+      creatorUser.id,
+
+    action:
+      "requisition.consolidated_create",
+
+    entityType:
+      "Requisition",
+
+    entityId:
+      consolidated._id,
+
+    details: {
+      sourceRequisitions:
+        sourceRequisitions.map(
+          (r) => String(r._id)
+        ),
+
+      sourceCount:
+        sourceRequisitions.length,
+
+      requestingUnits,
+
+      estimatedCost,
+
+      createdByRole:
+        creatorUser.role,
+    },
+  });
+
+  return consolidated;
+}
+
+/*
+ * --------------------------------------------------
+ * MARK SOURCE REQUISITIONS AS CONSOLIDATED
+ * --------------------------------------------------
+ *
+ * We deliberately keep this separate from
+ * createConsolidatedRequisition().
+ *
+ * The UI/API can decide when the source records
+ * should become unavailable for another batch.
+ */
+export async function markRequisitionsAsConsolidated({
+  requisitionIds,
+  consolidatedRequisitionId,
+  actorId,
+}) {
+  if (
+    !Array.isArray(requisitionIds) ||
+    requisitionIds.length === 0
+  ) {
+    return;
+  }
+
+  await Requisition.updateMany(
+    {
+      _id: {
+        $in: requisitionIds,
+      },
+    },
+    {
+      $set: {
+        consolidatedInto:
+          consolidatedRequisitionId,
+      },
+    }
+  );
+
+  await AuditLog.create({
+    actor: actorId,
+
+    action:
+      "requisition.sources_consolidated",
+
+    entityType:
+      "Requisition",
+
+    entityId:
+      consolidatedRequisitionId,
+
+    details: {
+      sourceRequisitions:
+        requisitionIds,
+    },
+  });
+    }
+
 export function isRequisitionEscalated(
   estimatedCost
 ) {
