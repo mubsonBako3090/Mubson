@@ -11,12 +11,22 @@ import {
   REQUISITION_STATUS,
 } from "@/constants/requisitionOptions";
 
+import { ROLES } from "@/constants/roles";
+
 import {
   sendRequisitionSubmittedEmail,
   sendApprovalStepEmail,
 } from "@/lib/mailer";
 
-function computeItemTotals(items = []) {
+/*
+ * --------------------------------------------------
+ * ITEM TOTALS
+ * --------------------------------------------------
+ */
+
+function computeItemTotals(
+  items = []
+) {
   return items.map((item) => ({
     ...item,
 
@@ -26,25 +36,37 @@ function computeItemTotals(items = []) {
   }));
 }
 
-function sumEstimatedCost(items = []) {
+function sumEstimatedCost(
+  items = []
+) {
   return items.reduce(
     (sum, item) =>
       sum +
-      Number(item.totalCost || 0),
+      Number(
+        item.totalCost || 0
+      ),
     0
   );
 }
+
+/*
+ * --------------------------------------------------
+ * REQUISITION NUMBER
+ * --------------------------------------------------
+ */
 
 async function generateRequisitionNumber() {
   const year =
     new Date().getFullYear();
 
   const count =
-    await Requisition.countDocuments({
-      requisitionNumber: {
-        $regex: `^KSU/REQ/${year}/`,
-      },
-    });
+    await Requisition.countDocuments(
+      {
+        requisitionNumber: {
+          $regex: `^KSU/REQ/${year}/`,
+        },
+      }
+    );
 
   const seq = String(
     count + 1
@@ -54,8 +76,63 @@ async function generateRequisitionNumber() {
 }
 
 /*
- * Creates a new draft or updates an existing draft/returned requisition.
+ * --------------------------------------------------
+ * ORGANIZATION
+ * --------------------------------------------------
+ *
+ * Normal requester:
+ *
+ *   User's own organization
+ *
+ * Procurement:
+ *
+ *   Organization selected in the form
+ *
+ * This is the key Option B change.
  */
+
+function getRequestingOrganization({
+  requesterUser,
+  payload,
+}) {
+  const isProcurement =
+    requesterUser.role ===
+    ROLES.PROCUREMENT;
+
+  if (isProcurement) {
+    return {
+      collegeId:
+        payload.collegeId ||
+        "N/A",
+
+      facultyId:
+        payload.facultyId ||
+        "N/A",
+
+      department:
+        payload.department ||
+        "N/A",
+    };
+  }
+
+  return {
+    collegeId:
+      requesterUser.collegeId,
+
+    facultyId:
+      requesterUser.facultyId,
+
+    department:
+      requesterUser.department,
+  };
+}
+
+/*
+ * --------------------------------------------------
+ * SAVE DRAFT
+ * --------------------------------------------------
+ */
+
 export async function saveDraft({
   requisitionId,
   requesterUser,
@@ -69,30 +146,52 @@ export async function saveDraft({
   const estimatedCost =
     sumEstimatedCost(items);
 
-  /*
-   * requesterRole is deliberately taken from the
-   * authenticated user rather than the frontend.
-   */
+  const organization =
+    getRequestingOrganization({
+      requesterUser,
+      payload,
+    });
+
   const data = {
-    category: payload.category,
-    purpose: payload.purpose,
-    urgency: payload.urgency,
+    category:
+      payload.category,
+
+    purpose:
+      payload.purpose,
+
+    urgency:
+      payload.urgency,
+
     items,
+
     estimatedCost,
 
     requesterRole:
       requesterUser.role,
+
+    collegeId:
+      organization.collegeId,
+
+    facultyId:
+      organization.facultyId,
+
+    department:
+      organization.department,
   };
 
   let requisition;
 
   /*
-   * UPDATE EXISTING REQUISITION
+   * --------------------------------------------------
+   * UPDATE
+   * --------------------------------------------------
    */
+
   if (requisitionId) {
     requisition =
       await Requisition.findOne({
         _id: requisitionId,
+
         requester:
           requesterUser.id,
       });
@@ -103,10 +202,6 @@ export async function saveDraft({
       );
     }
 
-    /*
-     * Only drafts and requisitions returned
-     * to the requester can be edited.
-     */
     const editable =
       requisition.status ===
         REQUISITION_STATUS.DRAFT ||
@@ -138,16 +233,36 @@ export async function saveDraft({
       data.estimatedCost;
 
     /*
-     * Preserve the original role snapshot.
+     * Only Procurement may update
+     * the requesting organization
+     * from the requisition form.
+     *
+     * For normal users, preserve the
+     * original organizational snapshot.
      */
-    if (!requisition.requesterRole) {
+    if (
+      requesterUser.role ===
+      ROLES.PROCUREMENT
+    ) {
+      requisition.collegeId =
+        data.collegeId;
+
+      requisition.facultyId =
+        data.facultyId;
+
+      requisition.department =
+        data.department;
+    }
+
+    if (
+      !requisition.requesterRole
+    ) {
       requisition.requesterRole =
         requesterUser.role;
     }
 
     /*
-     * If it is being edited after being returned,
-     * reset it to draft so the requester can submit again.
+     * Returned → Draft.
      */
     if (
       requisition.status ===
@@ -165,8 +280,11 @@ export async function saveDraft({
   }
 
   /*
-   * CREATE NEW DRAFT
+   * --------------------------------------------------
+   * CREATE
+   * --------------------------------------------------
    */
+
   else {
     requisition =
       await Requisition.create({
@@ -174,21 +292,6 @@ export async function saveDraft({
 
         requester:
           requesterUser.id,
-
-        /*
-         * THIS FIXES YOUR CURRENT ERROR.
-         */
-        requesterRole:
-          requesterUser.role,
-
-        collegeId:
-          requesterUser.collegeId,
-
-        facultyId:
-          requesterUser.facultyId,
-
-        department:
-          requesterUser.department,
 
         status:
           REQUISITION_STATUS.DRAFT,
@@ -199,23 +302,41 @@ export async function saveDraft({
     actor:
       requesterUser.id,
 
-    action: requisitionId
-      ? "requisition.draft_update"
-      : "requisition.draft_create",
+    action:
+      requisitionId
+        ? "requisition.draft_update"
+        : "requisition.draft_create",
 
     entityType:
       "Requisition",
 
     entityId:
       requisition._id,
+
+    details: {
+      requesterRole:
+        requesterUser.role,
+
+      requestingCollege:
+        requisition.collegeId,
+
+      requestingFaculty:
+        requisition.facultyId,
+
+      requestingDepartment:
+        requisition.department,
+    },
   });
 
   return requisition;
 }
 
 /*
- * Submits a draft into the approval chain.
+ * --------------------------------------------------
+ * SUBMIT
+ * --------------------------------------------------
  */
+
 export async function submitRequisition({
   requisitionId,
   requesterUser,
@@ -223,6 +344,7 @@ export async function submitRequisition({
   const requisition =
     await Requisition.findOne({
       _id: requisitionId,
+
       requester:
         requesterUser.id,
     });
@@ -252,37 +374,75 @@ export async function submitRequisition({
   }
 
   /*
-   * Make sure older requisitions that were created
-   * before requesterRole was introduced receive the field.
+   * --------------------------------------------------
+   * PROCUREMENT VALIDATION
+   * --------------------------------------------------
+   *
+   * Procurement must explicitly identify
+   * the organization whose requirements
+   * are being requested.
    */
-  if (!requisition.requesterRole) {
+
+  const isProcurement =
+    requesterUser.role ===
+    ROLES.PROCUREMENT;
+
+  if (isProcurement) {
+    if (
+      !requisition.collegeId ||
+      requisition.collegeId ===
+        "N/A" ||
+      !requisition.facultyId ||
+      requisition.facultyId ===
+        "N/A" ||
+      !requisition.department ||
+      requisition.department ===
+        "N/A"
+    ) {
+      throw new Error(
+        "Procurement must select the requesting College, Faculty and Department before submitting."
+      );
+    }
+  }
+
+  /*
+   * Make sure older records have
+   * requesterRole.
+   */
+
+  if (
+    !requisition.requesterRole
+  ) {
     requisition.requesterRole =
       requesterUser.role;
   }
 
   /*
-   * Build routing according to who created
-   * the requisition.
+   * --------------------------------------------------
+   * BUILD APPROVAL CHAIN
+   * --------------------------------------------------
    */
+
   const {
     chain,
     requiresGovernorApproval,
-  } = await buildApprovalChain({
-    requesterRole:
-      requisition.requesterRole,
+  } =
+    await buildApprovalChain({
+      requesterRole:
+        requisition.requesterRole,
 
-    collegeId:
-      requisition.collegeId,
+      collegeId:
+        requisition.collegeId,
 
-    facultyId:
-      requisition.facultyId,
+      facultyId:
+        requisition.facultyId,
 
-    department:
-      requisition.department,
+      department:
+        requisition.department,
 
-    estimatedCost:
-      requisition.estimatedCost,
-  });
+      estimatedCost:
+        requisition.estimatedCost,
+    });
 
   requisition.approvalChain =
     chain;
@@ -308,13 +468,35 @@ export async function submitRequisition({
   requisition.procurementReceivedAt =
     undefined;
 
+  requisition.procurementStartedAt =
+    undefined;
+
+  requisition.procurementCompletedAt =
+    undefined;
+
   /*
-   * Generate requisition number only once.
+   * Generate number only once.
    */
-  if (!requisition.requisitionNumber) {
+
+  if (
+    !requisition.requisitionNumber
+  ) {
     requisition.requisitionNumber =
       await generateRequisitionNumber();
   }
+
+  /*
+   * Procurement requisitions should
+   * start without an active processing
+   * status because they are still waiting
+   * for VC approval.
+   */
+
+  requisition.procurementStatus =
+    undefined;
+
+  requisition.procurementOfficer =
+    undefined;
 
   await requisition.save();
 
@@ -335,6 +517,15 @@ export async function submitRequisition({
       requesterRole:
         requisition.requesterRole,
 
+      requestingCollege:
+        requisition.collegeId,
+
+      requestingFaculty:
+        requisition.facultyId,
+
+      requestingDepartment:
+        requisition.department,
+
       requiresGovernorApproval,
 
       resubmission:
@@ -348,8 +539,9 @@ export async function submitRequisition({
   );
 
   /*
-   * Notify the first approval/processing stage.
+   * Notify first approval authority.
    */
+
   const firstStep =
     chain[0];
 
@@ -378,4 +570,4 @@ export function isRequisitionEscalated(
   return isEscalated(
     estimatedCost
   );
-        }
+  }
