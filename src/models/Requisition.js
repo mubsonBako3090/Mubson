@@ -1,6 +1,21 @@
 import mongoose from "mongoose";
 import { REQUISITION_STATUS } from "@/constants/requisitionOptions";
 
+/*
+ * --------------------------------------------------
+ * ITEM SCHEMA
+ * --------------------------------------------------
+ *
+ * For a normal requisition:
+ *   requestingCollegeId
+ *   requestingFacultyId
+ *   requestingDepartment
+ * can remain empty.
+ *
+ * For a consolidated requisition:
+ * each item identifies exactly which
+ * organizational unit requested it.
+ */
 const ItemSchema = new mongoose.Schema(
   {
     name: {
@@ -8,12 +23,6 @@ const ItemSchema = new mongoose.Schema(
       required: true,
     },
 
-    /*
-     * For normal requisitions, this can remain empty.
-     *
-     * For consolidated requisitions, this identifies
-     * exactly which department needs this item.
-     */
     requestingCollegeId: {
       type: String,
     },
@@ -47,6 +56,11 @@ const ItemSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/*
+ * --------------------------------------------------
+ * ATTACHMENT SCHEMA
+ * --------------------------------------------------
+ */
 const AttachmentSchema = new mongoose.Schema(
   {
     url: {
@@ -77,6 +91,11 @@ const AttachmentSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/*
+ * --------------------------------------------------
+ * COMMENT SCHEMA
+ * --------------------------------------------------
+ */
 const CommentSchema = new mongoose.Schema(
   {
     author: {
@@ -98,6 +117,18 @@ const CommentSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/*
+ * --------------------------------------------------
+ * APPROVAL CHAIN STEP
+ * --------------------------------------------------
+ *
+ * type = "approval"
+ *   The person must approve, return or reject.
+ *
+ * type = "processing"
+ *   Informational processing stage.
+ *   Procurement does NOT approve the requisition.
+ */
 const ApprovalChainStepSchema = new mongoose.Schema(
   {
     role: {
@@ -110,14 +141,6 @@ const ApprovalChainStepSchema = new mongoose.Schema(
       ref: "User",
     },
 
-    /*
-     * approval:
-     *   The person must approve/reject/return.
-     *
-     * processing:
-     *   Informational processing stage.
-     *   Procurement does NOT approve the requisition.
-     */
     type: {
       type: String,
       enum: ["approval", "processing"],
@@ -127,14 +150,27 @@ const ApprovalChainStepSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/*
+ * --------------------------------------------------
+ * REQUISITION SCHEMA
+ * --------------------------------------------------
+ */
 const RequisitionSchema = new mongoose.Schema(
   {
+    /*
+     * --------------------------------------------------
+     * BASIC IDENTIFICATION
+     * --------------------------------------------------
+     */
     requisitionNumber: {
       type: String,
       unique: true,
       sparse: true,
     },
 
+    /*
+     * User who initiated the requisition.
+     */
     requester: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -149,7 +185,7 @@ const RequisitionSchema = new mongoose.Schema(
       required: true,
     },
 
-        /*
+    /*
      * --------------------------------------------------
      * CONSOLIDATED REQUISITION
      * --------------------------------------------------
@@ -158,9 +194,8 @@ const RequisitionSchema = new mongoose.Schema(
      *   Normal requisition.
      *
      * true:
-     *   This requisition combines requirements from
-     *   multiple existing requisitions/organizational
-     *   units.
+     *   Requisition combines requirements from
+     *   multiple requisitions or organizational units.
      */
     isConsolidated: {
       type: Boolean,
@@ -168,8 +203,12 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * Requisitions that were combined to create this
-     * consolidated requisition.
+     * --------------------------------------------------
+     * SOURCE REQUISITIONS
+     * --------------------------------------------------
+     *
+     * Stores the original requisitions that were
+     * combined into this consolidated requisition.
      *
      * Example:
      *
@@ -179,21 +218,28 @@ const RequisitionSchema = new mongoose.Schema(
      *   requisitionC
      * ]
      */
-    sourceRequisitions: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Requisition",
-      },
-    ],
+    sourceRequisitions: {
+      type: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Requisition",
+        },
+      ],
+      default: [],
+    },
 
     /*
+     * --------------------------------------------------
+     * CONSOLIDATED BY
+     * --------------------------------------------------
+     *
      * User who created the consolidated requisition.
      *
-     * Usually:
-     * Dean
-     * Provost
-     * VC
-     * Procurement
+     * Possible roles:
+     *   Dean
+     *   Provost
+     *   VC
+     *   Procurement
      */
     consolidatedBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -201,33 +247,51 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * Organizational units represented in the
-     * consolidated requisition.
+     * --------------------------------------------------
+     * REQUESTING UNITS
+     * --------------------------------------------------
      *
-     * These are snapshots so that future changes to
-     * users/departments do not change historical records.
+     * Stores the organizational units represented
+     * in a consolidated requisition.
+     *
+     * These are snapshots so that future changes
+     * to departments/faculties/colleges do not
+     * change historical requisition records.
      */
-    requestingUnits: [
-      {
-        collegeId: {
-          type: String,
-          required: true,
-        },
+    requestingUnits: {
+      type: [
+        {
+          collegeId: {
+            type: String,
+            required: true,
+          },
 
-        facultyId: {
-          type: String,
-        },
+          facultyId: {
+            type: String,
+          },
 
-        department: {
-          type: String,
+          department: {
+            type: String,
+          },
         },
-      },
-    ],
+      ],
+      default: [],
+    },
 
     /*
-     * Organisational snapshot.
+     * --------------------------------------------------
+     * ORGANIZATIONAL SNAPSHOT
+     * --------------------------------------------------
+     *
+     * Normal requisition:
+     *
+     * College → Faculty → Department
+     *
+     * Consolidated requisition:
+     * these fields are not required because
+     * multiple organizational units may be involved.
      */
-        collegeId: {
+    collegeId: {
       type: String,
       required: function () {
         return !this.isConsolidated;
@@ -248,6 +312,11 @@ const RequisitionSchema = new mongoose.Schema(
       },
     },
 
+    /*
+     * --------------------------------------------------
+     * REQUISITION DETAILS
+     * --------------------------------------------------
+     */
     category: {
       type: String,
     },
@@ -260,6 +329,14 @@ const RequisitionSchema = new mongoose.Schema(
       type: String,
     },
 
+    /*
+     * --------------------------------------------------
+     * ITEMS
+     * --------------------------------------------------
+     *
+     * For consolidated requisitions, each item can
+     * identify its requesting department.
+     */
     items: {
       type: [ItemSchema],
       default: [],
@@ -270,6 +347,11 @@ const RequisitionSchema = new mongoose.Schema(
       default: 0,
     },
 
+    /*
+     * --------------------------------------------------
+     * ATTACHMENTS & COMMENTS
+     * --------------------------------------------------
+     */
     attachments: {
       type: [AttachmentSchema],
       default: [],
@@ -281,7 +363,9 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * Main requisition lifecycle.
+     * --------------------------------------------------
+     * MAIN REQUISITION STATUS
+     * --------------------------------------------------
      *
      * draft
      * pending
@@ -296,13 +380,15 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * Approval chain.
+     * --------------------------------------------------
+     * APPROVAL CHAIN
+     * --------------------------------------------------
      *
-     * Example:
+     * Normal example:
      *
-     * HOD -> Dean -> Provost -> VC -> Procurement
+     * HOD → Dean → Provost → VC → Procurement
      *
-     * Procurement is type "processing", not "approval".
+     * Procurement is "processing", not "approval".
      */
     approvalChain: {
       type: [ApprovalChainStepSchema],
@@ -310,7 +396,11 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * Index of the currently visible stage.
+     * --------------------------------------------------
+     * CURRENT STEP
+     * --------------------------------------------------
+     *
+     * Identifies the current stage of the workflow.
      *
      * After VC approval this points to Procurement.
      */
@@ -320,7 +410,12 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * True when requester must edit/resubmit.
+     * --------------------------------------------------
+     * REQUESTER ACTION
+     * --------------------------------------------------
+     *
+     * true when the requisition has been returned
+     * and the requester must edit/resubmit it.
      */
     awaitingRequesterAction: {
       type: Boolean,
@@ -328,7 +423,9 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * True when estimated cost exceeds escalation threshold.
+     * --------------------------------------------------
+     * ESCALATION
+     * --------------------------------------------------
      */
     requiresGovernorApproval: {
       type: Boolean,
@@ -353,12 +450,12 @@ const RequisitionSchema = new mongoose.Schema(
      *
      * Procurement does NOT approve the requisition.
      *
-     * It receives the requisition after VC approval.
-     *
-     * Values:
+     * After VC approval:
      *
      * ready
+     *   ↓
      * processing
+     *   ↓
      * completed
      */
     procurementStatus: {
@@ -372,8 +469,8 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * Procurement Officer assigned to process
-     * this requisition.
+     * Procurement staff member assigned to
+     * process the requisition.
      */
     procurementOfficer: {
       type: mongoose.Schema.Types.ObjectId,
@@ -401,6 +498,11 @@ const RequisitionSchema = new mongoose.Schema(
       type: Date,
     },
 
+    /*
+     * --------------------------------------------------
+     * TIMESTAMPS
+     * --------------------------------------------------
+     */
     submittedAt: {
       type: Date,
     },
@@ -414,6 +516,14 @@ const RequisitionSchema = new mongoose.Schema(
   }
 );
 
+/*
+ * --------------------------------------------------
+ * MODEL EXPORT
+ * --------------------------------------------------
+ *
+ * Prevents OverwriteModelError during Next.js
+ * development hot reloads.
+ */
 export default mongoose.models.Requisition ||
   mongoose.model(
     "Requisition",
