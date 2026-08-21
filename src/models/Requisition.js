@@ -8,6 +8,24 @@ const ItemSchema = new mongoose.Schema(
       required: true,
     },
 
+    /*
+     * For normal requisitions, this can remain empty.
+     *
+     * For consolidated requisitions, this identifies
+     * exactly which department needs this item.
+     */
+    requestingCollegeId: {
+      type: String,
+    },
+
+    requestingFacultyId: {
+      type: String,
+    },
+
+    requestingDepartment: {
+      type: String,
+    },
+
     quantity: {
       type: Number,
       required: true,
@@ -131,22 +149,103 @@ const RequisitionSchema = new mongoose.Schema(
       required: true,
     },
 
+        /*
+     * --------------------------------------------------
+     * CONSOLIDATED REQUISITION
+     * --------------------------------------------------
+     *
+     * false:
+     *   Normal requisition.
+     *
+     * true:
+     *   This requisition combines requirements from
+     *   multiple existing requisitions/organizational
+     *   units.
+     */
+    isConsolidated: {
+      type: Boolean,
+      default: false,
+    },
+
+    /*
+     * Requisitions that were combined to create this
+     * consolidated requisition.
+     *
+     * Example:
+     *
+     * [
+     *   requisitionA,
+     *   requisitionB,
+     *   requisitionC
+     * ]
+     */
+    sourceRequisitions: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Requisition",
+      },
+    ],
+
+    /*
+     * User who created the consolidated requisition.
+     *
+     * Usually:
+     * Dean
+     * Provost
+     * VC
+     * Procurement
+     */
+    consolidatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
+    /*
+     * Organizational units represented in the
+     * consolidated requisition.
+     *
+     * These are snapshots so that future changes to
+     * users/departments do not change historical records.
+     */
+    requestingUnits: [
+      {
+        collegeId: {
+          type: String,
+          required: true,
+        },
+
+        facultyId: {
+          type: String,
+        },
+
+        department: {
+          type: String,
+        },
+      },
+    ],
+
     /*
      * Organisational snapshot.
      */
-    collegeId: {
+        collegeId: {
       type: String,
-      required: true,
+      required: function () {
+        return !this.isConsolidated;
+      },
     },
 
     facultyId: {
       type: String,
-      required: true,
+      required: function () {
+        return !this.isConsolidated;
+      },
     },
 
     department: {
       type: String,
-      required: true,
+      required: function () {
+        return !this.isConsolidated;
+      },
     },
 
     category: {
