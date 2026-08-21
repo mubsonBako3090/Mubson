@@ -1,45 +1,149 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import {
+  useParams,
+  useRouter,
+} from "next/navigation";
+
 import axios from "axios";
 import toast from "react-hot-toast";
+
 import Button from "@/components/ui/Button";
+
 import RequisitionWizardStep1 from "@/components/requisitions/RequisitionWizardStep1";
 import RequisitionWizardStep2 from "@/components/requisitions/RequisitionWizardStep2";
 import RequisitionWizardStep3 from "@/components/requisitions/RequisitionWizardStep3";
+
+import { ROLES } from "@/constants/roles";
+
 import wizardStyles from "./page.module.css";
 
-const STEPS = ["Details", "Items", "Review & Submit"];
+const STEPS = [
+  "Details",
+  "Items",
+  "Review & Submit",
+];
 
 export default function EditRequisitionPage() {
   const { id } = useParams();
+
   const router = useRouter();
-  const [step, setStep] = useState(0);
-  const [data, setData] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+
+  const [data, setData] =
+    useState(null);
+
+  const [user, setUser] =
+    useState(null);
+
+  const [step, setStep] =
+    useState(0);
+
+  const [saving, setSaving] =
+    useState(false);
+
+  const [submitting, setSubmitting] =
+    useState(false);
 
   useEffect(() => {
-    axios
-      .get(`/api/requisitions/${id}`)
-      .then(({ data: res }) => setData(res.requisition))
-      .catch((err) => toast.error(err.response?.data?.message || "Failed to load requisition."));
+    async function load() {
+      try {
+        const [
+          requisitionResponse,
+          userResponse,
+        ] = await Promise.all([
+          axios.get(
+            `/api/requisitions/${id}`
+          ),
+
+          axios.get(
+            "/api/users/me"
+          ),
+        ]);
+
+        setData(
+          requisitionResponse.data
+            .requisition
+        );
+
+        setUser(
+          userResponse.data.user
+        );
+      } catch (error) {
+        toast.error(
+          error.response?.data?.message ||
+            "Failed to load requisition."
+        );
+      }
+    }
+
+    load();
   }, [id]);
 
   function update(partial) {
-    setData((d) => ({ ...d, ...partial }));
+    setData((current) => ({
+      ...current,
+      ...partial,
+    }));
   }
 
-  async function saveDraft({ silent = false } = {}) {
+  async function saveDraft({
+    silent = false,
+  } = {}) {
     setSaving(true);
+
     try {
-      const payload = { category: data.category, purpose: data.purpose, urgency: data.urgency, items: data.items };
-      const { data: res } = await axios.patch(`/api/requisitions/${id}`, payload);
-      if (!silent) toast.success("Changes saved.");
-      return res.requisition;
-    } catch (err) {
-      toast.error(err.response?.data?.message || "Failed to save.");
+      const payload = {
+        category:
+          data.category,
+
+        purpose:
+          data.purpose,
+
+        urgency:
+          data.urgency,
+
+        items:
+          data.items,
+
+        /*
+         * Important for Procurement
+         * when editing/resuming.
+         */
+        collegeId:
+          data.collegeId,
+
+        facultyId:
+          data.facultyId,
+
+        department:
+          data.department,
+      };
+
+      const {
+        data: response,
+      } = await axios.patch(
+        `/api/requisitions/${id}`,
+        payload
+      );
+
+      if (!silent) {
+        toast.success(
+          "Changes saved."
+        );
+      }
+
+      setData(
+        response.requisition
+      );
+
+      return response.requisition;
+    } catch (error) {
+      toast.error(
+        error.response?.data?.message ||
+          "Failed to save."
+      );
+
       return null;
     } finally {
       setSaving(false);
@@ -47,82 +151,233 @@ export default function EditRequisitionPage() {
   }
 
   async function handleNext() {
-    await saveDraft({ silent: true });
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+    const saved =
+      await saveDraft({
+        silent: true,
+      });
+
+    if (!saved) return;
+
+    setStep((current) =>
+      Math.min(
+        current + 1,
+        STEPS.length - 1
+      )
+    );
   }
 
   function handleBack() {
-    setStep((s) => Math.max(s - 1, 0));
+    setStep((current) =>
+      Math.max(current - 1, 0)
+    );
   }
 
   async function handleSubmit() {
-    const saved = await saveDraft({ silent: true });
+    if (
+      user?.role ===
+      ROLES.PROCUREMENT
+    ) {
+      if (
+        !data.collegeId ||
+        !data.facultyId ||
+        !data.department
+      ) {
+        toast.error(
+          "Please select the requesting College, Faculty and Department."
+        );
+
+        setStep(0);
+
+        return;
+      }
+    }
+
+    const saved =
+      await saveDraft({
+        silent: true,
+      });
+
     if (!saved) return;
 
     setSubmitting(true);
+
     try {
-      await axios.post(`/api/requisitions/${id}/submit`);
-      toast.success("Requisition submitted for approval.");
-      router.push(`/requisitions/${id}`);
-    } catch (err) {
-      toast.error(err.response?.data?.message || "Submission failed.");
+      await axios.post(
+        `/api/requisitions/${id}/submit`
+      );
+
+      toast.success(
+        "Requisition submitted for approval."
+      );
+
+      router.push(
+        `/requisitions/${id}`
+      );
+    } catch (error) {
+      toast.error(
+        error.response?.data?.message ||
+          "Submission failed."
+      );
     } finally {
       setSubmitting(false);
     }
   }
 
-  if (!data) return <p>Loading…</p>;
+  if (!data || !user) {
+    return <p>Loading…</p>;
+  }
+
+  const requesterRole =
+    data.requesterRole ||
+    user.role;
 
   return (
-    <div className={wizardStyles.wrapper}>
-      <h1 className={wizardStyles.heading}>
-        {data.status === "returned" ? "Amend & Resubmit Requisition" : "Resume Draft"}
+    <div
+      className={
+        wizardStyles.wrapper
+      }
+    >
+      <h1
+        className={
+          wizardStyles.heading
+        }
+      >
+        {data.status ===
+        "returned"
+          ? "Amend & Resubmit Requisition"
+          : "Resume Draft"}
       </h1>
 
-      <div className={wizardStyles.steps}>
-        {STEPS.map((label, i) => (
-          <div
-            key={label}
-            className={`${wizardStyles.stepIndicator} ${i === step ? wizardStyles.stepActive : ""} ${
-              i < step ? wizardStyles.stepDone : ""
-            }`}
-          >
-            <span className={wizardStyles.stepNumber}>{i + 1}</span>
-            <span className={wizardStyles.stepLabel}>{label}</span>
-          </div>
-        ))}
+      <div
+        className={
+          wizardStyles.steps
+        }
+      >
+        {STEPS.map(
+          (label, index) => (
+            <div
+              key={label}
+              className={`${wizardStyles.stepIndicator} ${
+                index === step
+                  ? wizardStyles.stepActive
+                  : ""
+              } ${
+                index < step
+                  ? wizardStyles.stepDone
+                  : ""
+              }`}
+            >
+              <span
+                className={
+                  wizardStyles.stepNumber
+                }
+              >
+                {index + 1}
+              </span>
+
+              <span
+                className={
+                  wizardStyles.stepLabel
+                }
+              >
+                {label}
+              </span>
+            </div>
+          )
+        )}
       </div>
 
-      <div className={wizardStyles.stepBody}>
-        {step === 0 && <RequisitionWizardStep1 data={data} onChange={update} />}
-        {step === 1 && <RequisitionWizardStep2 items={data.items} onChange={update} />}
+      <div
+        className={
+          wizardStyles.stepBody
+        }
+      >
+        {step === 0 && (
+          <RequisitionWizardStep1
+            data={data}
+            onChange={update}
+            requesterRole={
+              requesterRole
+            }
+          />
+        )}
+
+        {step === 1 && (
+          <RequisitionWizardStep2
+            items={
+              data.items || []
+            }
+            onChange={update}
+          />
+        )}
+
         {step === 2 && (
           <RequisitionWizardStep3
             data={data}
             requisitionId={id}
-            onAttachmentsUploaded={(attachments) => update({ attachments })}
+            onAttachmentsUploaded={(
+              attachments
+            ) =>
+              update({
+                attachments,
+              })
+            }
           />
         )}
       </div>
 
-      <div className={wizardStyles.actions}>
-        <div className={wizardStyles.actionsLeft}>
+      <div
+        className={
+          wizardStyles.actions
+        }
+      >
+        <div
+          className={
+            wizardStyles.actionsLeft
+          }
+        >
           {step > 0 && (
-            <Button variant="ghost" onClick={handleBack}>
+            <Button
+              variant="ghost"
+              onClick={handleBack}
+            >
               Back
             </Button>
           )}
         </div>
-        <div className={wizardStyles.actionsRight}>
-          <Button variant="secondary" onClick={() => saveDraft()} loading={saving}>
+
+        <div
+          className={
+            wizardStyles.actionsRight
+          }
+        >
+          <Button
+            variant="secondary"
+            onClick={() =>
+              saveDraft()
+            }
+            loading={saving}
+          >
             Save Changes
           </Button>
-          {step < STEPS.length - 1 ? (
-            <Button onClick={handleNext} loading={saving}>
+
+          {step <
+          STEPS.length - 1 ? (
+            <Button
+              onClick={handleNext}
+              loading={saving}
+            >
               Next
             </Button>
           ) : (
-            <Button onClick={handleSubmit} loading={submitting}>
+            <Button
+              onClick={
+                handleSubmit
+              }
+              loading={
+                submitting
+              }
+            >
               Submit for Approval
             </Button>
           )}
@@ -130,4 +385,4 @@ export default function EditRequisitionPage() {
       </div>
     </div>
   );
-}
+      }
