@@ -219,14 +219,19 @@ const RequisitionSchema = new mongoose.Schema(
      * ]
      */
     sourceRequisitions: {
-      type: [
-        {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "Requisition",
-        },
-      ],
-      default: [],
+  type: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Requisition",
     },
+  ],
+  default: [],
+},
+
+consolidatedInto: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "Requisition",
+},
 
     /*
      * --------------------------------------------------
