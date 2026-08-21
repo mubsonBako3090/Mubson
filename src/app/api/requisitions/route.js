@@ -14,19 +14,26 @@ import {
   saveDraft,
 } from "@/services/requisitionService";
 
-import { ROLES } from "@/constants/roles";
-
 function getAuth() {
-  const token =
-    cookies().get("token")?.value;
+  const token = cookies().get("token")?.value;
 
-  return token
-    ? verifyToken(token)
-    : null;
+  return token ? verifyToken(token) : null;
 }
 
 /*
- * GET requisitions.
+ * GET /api/requisitions
+ *
+ * IMPORTANT:
+ *
+ * Every role sees ONLY requisitions that they personally
+ * initiated.
+ *
+ * Approval queues are handled separately by:
+ *
+ * /api/approvals
+ *
+ * Procurement processing queues should also be handled
+ * separately from this endpoint.
  */
 export async function GET(request) {
   const auth = getAuth();
@@ -50,27 +57,41 @@ export async function GET(request) {
   const status =
     searchParams.get("status");
 
-  const query = {};
-
   /*
-   * Requesters see their own requisitions.
+   * --------------------------------------------------
+   * CURRENT USER'S REQUISITIONS ONLY
+   * --------------------------------------------------
+   *
+   * This applies to EVERY role:
+   *
+   * Requester
+   * HOD
+   * Dean
+   * Provost
+   * VC
+   * Procurement
+   * Admin
+   *
+   * Therefore nobody sees requisitions initiated
+   * by another user simply by visiting:
+   *
+   * /requisitions
    */
-  if (
-    auth.role ===
-    ROLES.REQUESTER
-  ) {
-    query.requester =
-      auth.sub;
-  }
+  const query = {
+    requester: auth.sub,
+  };
 
   /*
-   * Other roles can see relevant requisitions.
-   * More specific approval queue filtering can
-   * remain in the approvals endpoint.
+   * Optional status filter.
+   *
+   * Example:
+   *
+   * /requisitions?status=draft
+   * /requisitions?status=pending
+   * /requisitions?status=approved
    */
   if (status) {
-    query.status =
-      status;
+    query.status = status;
   }
 
   const requisitions =
@@ -90,7 +111,7 @@ export async function GET(request) {
 }
 
 /*
- * POST
+ * POST /api/requisitions
  *
  * Create a new draft.
  */
@@ -136,13 +157,12 @@ export async function POST(request) {
     await connectDB();
 
     /*
-     * IMPORTANT:
+     * The authenticated user's role and
+     * organisational information are taken
+     * from the JWT.
      *
-     * auth.role is passed here.
-     *
-     * This is what fixes:
-     *
-     * requesterRole: Path `requesterRole` is required.
+     * The frontend cannot decide who owns
+     * the requisition.
      */
     const requisition =
       await saveDraft({
