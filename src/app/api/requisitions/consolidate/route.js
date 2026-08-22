@@ -3,18 +3,18 @@ import { cookies } from "next/headers";
 
 import { verifyToken } from "@/lib/auth";
 import { connectDB } from "@/lib/db";
-
 import Requisition from "@/models/Requisition";
 
 import {
-  createConsolidatedRequisition,
-} from "@/services/consolidatedRequisitionService";
+  canCreateConsolidatedRequisition,
+  getConsolidatableRequisitions,
+  validateConsolidationSelection,
+  buildConsolidatedItems,
+  buildRequestingUnits,
+} from "@/lib/consolidation";
 
 import { ROLES } from "@/constants/roles";
-
-import {
-  REQUISITION_STATUS,
-} from "@/constants/requisitionOptions";
+import { REQUISITION_STATUS } from "@/constants/requisitionOptions";
 
 /*
  * --------------------------------------------------
@@ -25,70 +25,30 @@ import {
 function getAuth() {
   const token = cookies().get("token")?.value;
 
-  return token
-    ? verifyToken(token)
-    : null;
+  return token ? verifyToken(token) : null;
 }
 
 /*
  * --------------------------------------------------
- * ALLOWED ROLES
+ * GET
  * --------------------------------------------------
- */
-
-const ALLOWED_ROLES = [
-  ROLES.DEAN,
-  ROLES.PROVOST,
-  ROLES.VC,
-  ROLES.PROCUREMENT,
-];
-
-/*
- * --------------------------------------------------
- * BUILD ORGANIZATIONAL FILTER
- * --------------------------------------------------
+ *
+ * GET /api/requisitions/consolidate
+ *
+ * Returns requisitions that the currently logged-in
+ * user is allowed to select for consolidation.
  *
  * Dean:
- *   Only requisitions from their faculty.
+ *   Faculty scope
  *
  * Provost:
- *   Only requisitions from their college.
+ *   College scope
  *
  * VC:
- *   University-wide.
+ *   University scope
  *
  * Procurement:
- *   University-wide.
- */
-
-function getOrganizationFilter(auth) {
-  if (auth.role === ROLES.DEAN) {
-    return {
-      facultyId: auth.facultyId,
-      collegeId: auth.collegeId,
-    };
-  }
-
-  if (auth.role === ROLES.PROVOST) {
-    return {
-      collegeId: auth.collegeId,
-    };
-  }
-
-  /*
-   * VC and Procurement are university-wide.
-   */
-
-  return {};
-}
-
-/*
- * --------------------------------------------------
- * GET /api/requisitions/consolidate
- * --------------------------------------------------
- *
- * Returns requisitions available to the current
- * user for consolidation.
+ *   University-wide
  */
 
 export async function GET() {
@@ -107,14 +67,14 @@ export async function GET() {
     }
 
     if (
-      !ALLOWED_ROLES.includes(
+      !canCreateConsolidatedRequisition(
         auth.role
       )
     ) {
       return NextResponse.json(
         {
           message:
-            "Your role is not authorized to consolidate requisitions.",
+            "Your role is not authorized to create consolidated requisitions.",
         },
         {
           status: 403,
@@ -124,96 +84,21 @@ export async function GET() {
 
     await connectDB();
 
-    /*
-     * --------------------------------------------------
-     * ORGANIZATIONAL FILTER
-     * --------------------------------------------------
-     */
-
-    const organizationFilter =
-      getOrganizationFilter(auth);
-
-    /*
-     * --------------------------------------------------
-     * FIND AVAILABLE REQUISITIONS
-     * --------------------------------------------------
-     *
-     * We intentionally exclude:
-     *
-     * - drafts
-     * - rejected requisitions
-     * - already consolidated requisitions
-     * - requisitions with no items
-     *
-     * Pending and approved requisitions can be
-     * considered for consolidation.
-     */
-
     const requisitions =
-      await Requisition.find({
-        ...organizationFilter,
-
-        status: {
-          $in: [
-            REQUISITION_STATUS.PENDING,
-            REQUISITION_STATUS.APPROVED,
-          ],
-        },
-
-        isConsolidated: {
-          $ne: true,
-        },
-
-        "items.0": {
-          $exists: true,
-        },
-      })
-        .populate(
-          "requester",
-          "fullName email role"
-        )
-        .select(
-          [
-            "_id",
-            "requisitionNumber",
-            "requester",
-            "requesterRole",
-            "collegeId",
-            "facultyId",
-            "department",
-            "category",
-            "purpose",
-            "urgency",
-            "items",
-            "estimatedCost",
-            "status",
-            "submittedAt",
-            "createdAt",
-          ].join(" ")
-        )
-        .sort({
-          submittedAt: -1,
-          createdAt: -1,
-        })
-        .lean();
-
-    /*
-     * --------------------------------------------------
-     * RESPONSE
-     * --------------------------------------------------
-     */
+      await getConsolidatableRequisitions({
+        id: auth.sub,
+        role: auth.role,
+        collegeId: auth.collegeId,
+        facultyId: auth.facultyId,
+        department: auth.department,
+      });
 
     return NextResponse.json({
-      role: auth.role,
-
-      count:
-        requisitions.length,
-
       requisitions,
     });
   } catch (error) {
     console.error(
-      "Get consolidation candidates error:",
+      "Consolidation GET error:",
       error
     );
 
@@ -232,8 +117,21 @@ export async function GET() {
 
 /*
  * --------------------------------------------------
- * POST /api/requisitions/consolidate
+ * POST
  * --------------------------------------------------
+ *
+ * POST /api/requisitions/consolidate
+ *
+ * Creates a consolidated requisition from multiple
+ * existing requisitions.
+ *
+ * IMPORTANT:
+ *
+ * Creating a consolidated requisition does NOT mean
+ * approving it.
+ *
+ * The new requisition still enters the appropriate
+ * approval workflow.
  */
 
 export async function POST(request) {
@@ -252,7 +150,7 @@ export async function POST(request) {
     }
 
     if (
-      !ALLOWED_ROLES.includes(
+      !canCreateConsolidatedRequisition(
         auth.role
       )
     ) {
@@ -267,52 +165,29 @@ export async function POST(request) {
       );
     }
 
-    const body =
-      await request.json();
+    const body = await request.json();
 
     const {
-      sourceRequisitionIds,
+      requisitionIds,
+      purpose,
+      urgency,
+      category,
     } = body;
 
-    if (
-      !Array.isArray(
-        sourceRequisitionIds
-      )
-    ) {
-      return NextResponse.json(
-        {
-          message:
-            "sourceRequisitionIds must be an array.",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
+    /*
+     * --------------------------------------------------
+     * BASIC VALIDATION
+     * --------------------------------------------------
+     */
 
     if (
-      sourceRequisitionIds.length ===
-      0
+      !Array.isArray(requisitionIds) ||
+      requisitionIds.length === 0
     ) {
       return NextResponse.json(
         {
           message:
-            "Select at least one requisition.",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
-
-    if (
-      sourceRequisitionIds.length >
-      100
-    ) {
-      return NextResponse.json(
-        {
-          message:
-            "You cannot consolidate more than 100 requisitions at once.",
+            "Select at least one requisition to consolidate.",
         },
         {
           status: 400,
@@ -322,20 +197,200 @@ export async function POST(request) {
 
     await connectDB();
 
-    const requisition =
-      await createConsolidatedRequisition({
-        sourceRequisitionIds,
+    /*
+     * --------------------------------------------------
+     * AUTHORIZATION
+     * --------------------------------------------------
+     *
+     * This is important.
+     *
+     * We do not trust the requisition IDs sent by
+     * the browser.
+     *
+     * Every selected requisition is checked against
+     * the user's actual organizational scope.
+     */
+
+    const selectedRequisitions =
+      await validateConsolidationSelection({
         user: {
           id: auth.sub,
           role: auth.role,
-          collegeId:
-            auth.collegeId,
-          facultyId:
-            auth.facultyId,
-          department:
-            auth.department,
+          collegeId: auth.collegeId,
+          facultyId: auth.facultyId,
+          department: auth.department,
         },
+
+        requisitionIds,
       });
+
+    /*
+     * --------------------------------------------------
+     * BUILD CONSOLIDATED ITEMS
+     * --------------------------------------------------
+     *
+     * Every item retains its originating department.
+     */
+
+    const items =
+      buildConsolidatedItems(
+        selectedRequisitions
+      );
+
+    if (items.length === 0) {
+      return NextResponse.json(
+        {
+          message:
+            "The selected requisitions contain no items.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    /*
+     * --------------------------------------------------
+     * REQUESTING UNITS
+     * --------------------------------------------------
+     */
+
+    const requestingUnits =
+      buildRequestingUnits(
+        selectedRequisitions
+      );
+
+    /*
+     * --------------------------------------------------
+     * ESTIMATED COST
+     * --------------------------------------------------
+     */
+
+    const estimatedCost =
+      items.reduce(
+        (sum, item) =>
+          sum +
+          Number(
+            item.totalCost || 0
+          ),
+        0
+      );
+
+    /*
+     * --------------------------------------------------
+     * ORGANIZATIONAL SNAPSHOT
+     * --------------------------------------------------
+     *
+     * A consolidated requisition can represent many
+     * organizational units, so the normal single
+     * college/faculty/department fields are not used
+     * as the primary organizational source.
+     */
+
+    const firstUnit =
+      requestingUnits[0];
+
+    /*
+     * --------------------------------------------------
+     * CREATE CONSOLIDATED REQUISITION
+     * --------------------------------------------------
+     */
+
+    const requisition =
+      await Requisition.create({
+        requester: auth.sub,
+
+        requesterRole:
+          auth.role,
+
+        isConsolidated: true,
+
+        sourceRequisitions:
+          selectedRequisitions.map(
+            (r) => r._id
+          ),
+
+        consolidatedBy:
+          auth.sub,
+
+        requestingUnits,
+
+        /*
+         * These fields are optional for consolidated
+         * requisitions according to the model.
+         *
+         * We populate them with the first unit only
+         * for compatibility with existing code.
+         */
+        collegeId:
+          firstUnit?.collegeId,
+
+        facultyId:
+          firstUnit?.facultyId,
+
+        department:
+          firstUnit?.department,
+
+        category:
+          category || "Other",
+
+        purpose:
+          purpose ||
+          "Consolidated institutional requirements.",
+
+        urgency:
+          urgency || "normal",
+
+        items,
+
+        estimatedCost,
+
+        status:
+          REQUISITION_STATUS.DRAFT,
+
+        currentStepIndex: 0,
+
+        awaitingRequesterAction: false,
+
+        /*
+         * Procurement processing starts only after
+         * the approval workflow reaches Procurement.
+         */
+        procurementStatus:
+          undefined,
+
+        procurementOfficer:
+          undefined,
+
+        procurementReceivedAt:
+          undefined,
+
+        procurementStartedAt:
+          undefined,
+
+        procurementCompletedAt:
+          undefined,
+      });
+
+    /*
+     * --------------------------------------------------
+     * MARK SOURCE REQUISITIONS
+     * --------------------------------------------------
+     *
+     * We do NOT delete or approve the original
+     * requisitions.
+     *
+     * They remain available as historical records.
+     *
+     * The new consolidated requisition simply records
+     * their IDs in sourceRequisitions.
+     */
+
+    /*
+     * --------------------------------------------------
+     * RESPONSE
+     * --------------------------------------------------
+     */
 
     return NextResponse.json(
       {
@@ -350,7 +405,7 @@ export async function POST(request) {
     );
   } catch (error) {
     console.error(
-      "Create consolidated requisition error:",
+      "Consolidation POST error:",
       error
     );
 
@@ -361,8 +416,8 @@ export async function POST(request) {
           "Failed to create consolidated requisition.",
       },
       {
-        status: 400,
+        status: 500,
       }
     );
   }
-}
+          }
