@@ -4,11 +4,17 @@ import { cookies } from "next/headers";
 import { verifyToken } from "@/lib/auth";
 import { connectDB } from "@/lib/db";
 
+import Requisition from "@/models/Requisition";
+
 import {
   createConsolidatedRequisition,
 } from "@/services/consolidatedRequisitionService";
 
 import { ROLES } from "@/constants/roles";
+
+import {
+  REQUISITION_STATUS,
+} from "@/constants/requisitionOptions";
 
 /*
  * --------------------------------------------------
@@ -28,22 +34,6 @@ function getAuth() {
  * --------------------------------------------------
  * ALLOWED ROLES
  * --------------------------------------------------
- *
- * These roles are allowed to create consolidated
- * requisitions.
- *
- * Dean:
- *   Consolidates requisitions from faculties/
- *   departments under the Dean.
- *
- * Provost:
- *   Consolidates requisitions from the college.
- *
- * VC:
- *   University-wide consolidation.
- *
- * Procurement:
- *   University-wide consolidation.
  */
 
 const ALLOWED_ROLES = [
@@ -55,18 +45,195 @@ const ALLOWED_ROLES = [
 
 /*
  * --------------------------------------------------
- * POST /api/requisitions/consolidate
+ * BUILD ORGANIZATIONAL FILTER
  * --------------------------------------------------
  *
- * Expected body:
+ * Dean:
+ *   Only requisitions from their faculty.
  *
- * {
- *   "sourceRequisitionIds": [
- *     "id1",
- *     "id2",
- *     "id3"
- *   ]
- * }
+ * Provost:
+ *   Only requisitions from their college.
+ *
+ * VC:
+ *   University-wide.
+ *
+ * Procurement:
+ *   University-wide.
+ */
+
+function getOrganizationFilter(auth) {
+  if (auth.role === ROLES.DEAN) {
+    return {
+      facultyId: auth.facultyId,
+      collegeId: auth.collegeId,
+    };
+  }
+
+  if (auth.role === ROLES.PROVOST) {
+    return {
+      collegeId: auth.collegeId,
+    };
+  }
+
+  /*
+   * VC and Procurement are university-wide.
+   */
+
+  return {};
+}
+
+/*
+ * --------------------------------------------------
+ * GET /api/requisitions/consolidate
+ * --------------------------------------------------
+ *
+ * Returns requisitions available to the current
+ * user for consolidation.
+ */
+
+export async function GET() {
+  try {
+    const auth = getAuth();
+
+    if (!auth) {
+      return NextResponse.json(
+        {
+          message: "Unauthorized",
+        },
+        {
+          status: 401,
+        }
+      );
+    }
+
+    if (
+      !ALLOWED_ROLES.includes(
+        auth.role
+      )
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            "Your role is not authorized to consolidate requisitions.",
+        },
+        {
+          status: 403,
+        }
+      );
+    }
+
+    await connectDB();
+
+    /*
+     * --------------------------------------------------
+     * ORGANIZATIONAL FILTER
+     * --------------------------------------------------
+     */
+
+    const organizationFilter =
+      getOrganizationFilter(auth);
+
+    /*
+     * --------------------------------------------------
+     * FIND AVAILABLE REQUISITIONS
+     * --------------------------------------------------
+     *
+     * We intentionally exclude:
+     *
+     * - drafts
+     * - rejected requisitions
+     * - already consolidated requisitions
+     * - requisitions with no items
+     *
+     * Pending and approved requisitions can be
+     * considered for consolidation.
+     */
+
+    const requisitions =
+      await Requisition.find({
+        ...organizationFilter,
+
+        status: {
+          $in: [
+            REQUISITION_STATUS.PENDING,
+            REQUISITION_STATUS.APPROVED,
+          ],
+        },
+
+        isConsolidated: {
+          $ne: true,
+        },
+
+        "items.0": {
+          $exists: true,
+        },
+      })
+        .populate(
+          "requester",
+          "fullName email role"
+        )
+        .select(
+          [
+            "_id",
+            "requisitionNumber",
+            "requester",
+            "requesterRole",
+            "collegeId",
+            "facultyId",
+            "department",
+            "category",
+            "purpose",
+            "urgency",
+            "items",
+            "estimatedCost",
+            "status",
+            "submittedAt",
+            "createdAt",
+          ].join(" ")
+        )
+        .sort({
+          submittedAt: -1,
+          createdAt: -1,
+        })
+        .lean();
+
+    /*
+     * --------------------------------------------------
+     * RESPONSE
+     * --------------------------------------------------
+     */
+
+    return NextResponse.json({
+      role: auth.role,
+
+      count:
+        requisitions.length,
+
+      requisitions,
+    });
+  } catch (error) {
+    console.error(
+      "Get consolidation candidates error:",
+      error
+    );
+
+    return NextResponse.json(
+      {
+        message:
+          error.message ||
+          "Failed to load requisitions available for consolidation.",
+      },
+      {
+        status: 500,
+      }
+    );
+  }
+}
+
+/*
+ * --------------------------------------------------
+ * POST /api/requisitions/consolidate
+ * --------------------------------------------------
  */
 
 export async function POST(request) {
@@ -84,10 +251,6 @@ export async function POST(request) {
       );
     }
 
-    /*
-     * Check role.
-     */
-
     if (
       !ALLOWED_ROLES.includes(
         auth.role
@@ -104,20 +267,12 @@ export async function POST(request) {
       );
     }
 
-    /*
-     * Read request body.
-     */
-
     const body =
       await request.json();
 
     const {
       sourceRequisitionIds,
     } = body;
-
-    /*
-     * Validate IDs.
-     */
 
     if (
       !Array.isArray(
@@ -150,12 +305,6 @@ export async function POST(request) {
       );
     }
 
-    /*
-     * Prevent an unnecessarily large request.
-     *
-     * This can be increased later if required.
-     */
-
     if (
       sourceRequisitionIds.length >
       100
@@ -172,12 +321,6 @@ export async function POST(request) {
     }
 
     await connectDB();
-
-    /*
-     * --------------------------------------------------
-     * CREATE CONSOLIDATED REQUISITION
-     * --------------------------------------------------
-     */
 
     const requisition =
       await createConsolidatedRequisition({
@@ -207,7 +350,7 @@ export async function POST(request) {
     );
   } catch (error) {
     console.error(
-      "Consolidated requisition error:",
+      "Create consolidated requisition error:",
       error
     );
 
@@ -222,4 +365,4 @@ export async function POST(request) {
       }
     );
   }
-        }
+}
