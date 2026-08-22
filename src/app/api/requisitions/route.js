@@ -17,6 +17,7 @@ function getAuth() {
 }
 
 // --------------------------------------------
+// --------------------------------------------
 // GET /api/requisitions
 // --------------------------------------------
 export async function GET(request) {
@@ -36,47 +37,175 @@ export async function GET(request) {
 
   /*
    * --------------------------------------------------
-   * REQUISITION VISIBILITY
+   * ROLE-BASED VISIBILITY
    * --------------------------------------------------
    *
-   * The normal Requisitions page shows ONLY requisitions
-   * created by the currently logged-in user.
+   * Every role should NOT see every requisition.
    *
-   * Approval work is handled separately through:
+   * Users can see:
    *
-   *     /api/approvals
+   * 1. Requisitions they personally created.
    *
-   * Consolidated requisitions will also be handled
-   * separately when we implement the batch system.
+   * 2. For approval roles (HOD, Dean, Provost, VC):
+   *    requisitions currently waiting for their approval.
+   *
+   * 3. Procurement:
+   *    requisitions they created OR requisitions assigned
+   *    to them for procurement processing.
+   *
+   * 4. Admin:
+   *    all requisitions.
    */
 
-  let query = {
-    requester: auth.sub,
-  };
+  let query = {};
 
   /*
-   * Optional status filter.
+   * --------------------------------------------------
+   * ADMIN
+   * --------------------------------------------------
    *
-   * Example:
-   *
-   * /requisitions?status=draft
-   *
-   * will show only THIS USER'S drafts.
-   *
-   * /requisitions?status=approved
-   *
-   * will show only THIS USER'S approved requisitions.
-   */
-  if (status) {
-    query.status = status;
-  }
-
-  /*
-   * Admin is the only role that should have
-   * university-wide visibility from this page.
+   * Admin has university-wide visibility.
    */
   if (auth.role === ROLES.ADMIN) {
     query = {};
+
+    if (status) {
+      query.status = status;
+    }
+  }
+
+  /*
+   * --------------------------------------------------
+   * APPROVAL ROLES
+   * --------------------------------------------------
+   *
+   * HOD / Dean / Provost / VC
+   *
+   * They see:
+   *
+   * - Their own requisitions
+   * - Requisitions currently waiting for them
+   *
+   * They do NOT see every submitted requisition.
+   */
+  else if (
+    auth.role === ROLES.HOD ||
+    auth.role === ROLES.DEAN ||
+    auth.role === ROLES.PROVOST ||
+    auth.role === ROLES.VC
+  ) {
+    const visibilityConditions = [
+      /*
+       * Requisitions created by this user.
+       */
+      {
+        requester: auth.sub,
+      },
+
+      /*
+       * Requisitions currently waiting
+       * for this user's approval.
+       */
+      {
+        status: {
+          $in: [
+            REQUISITION_STATUS.PENDING,
+            REQUISITION_STATUS.RETURNED,
+          ],
+        },
+
+        awaitingRequesterAction: {
+          $ne: true,
+        },
+
+        approvalChain: {
+          $elemMatch: {
+            approver: auth.sub,
+          },
+        },
+      },
+    ];
+
+    query = {
+      $or: visibilityConditions,
+    };
+
+    /*
+     * If a status filter is supplied, apply it
+     * together with the visibility rules.
+     */
+    if (status) {
+      query.status = status;
+    }
+  }
+
+  /*
+   * --------------------------------------------------
+   * PROCUREMENT
+   * --------------------------------------------------
+   *
+   * Procurement is not an approval authority.
+   *
+   * Procurement sees:
+   *
+   * 1. Requisitions they personally initiated.
+   *
+   * 2. Requisitions assigned to them for processing.
+   *
+   * 3. Requisitions ready for Procurement processing
+   *    when no specific officer has been assigned yet.
+   */
+  else if (auth.role === ROLES.PROCUREMENT) {
+    const visibilityConditions = [
+      /*
+       * Requisitions initiated by this Procurement Officer.
+       */
+      {
+        requester: auth.sub,
+      },
+
+      /*
+       * Requisitions specifically assigned
+       * to this Procurement Officer.
+       */
+      {
+        procurementOfficer: auth.sub,
+      },
+
+      /*
+       * Approved requisitions waiting for
+       * Procurement processing.
+       *
+       * procurementOfficer may still be empty
+       * when the system has not assigned one.
+       */
+      {
+        status: REQUISITION_STATUS.APPROVED,
+        procurementStatus: "ready",
+      },
+    ];
+
+    query = {
+      $or: visibilityConditions,
+    };
+
+    if (status) {
+      query.status = status;
+    }
+  }
+
+  /*
+   * --------------------------------------------------
+   * REQUESTER
+   * --------------------------------------------------
+   *
+   * Requesters can ONLY see requisitions
+   * they personally created.
+   */
+  else {
+    query = {
+      requester: auth.sub,
+    };
 
     if (status) {
       query.status = status;
