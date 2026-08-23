@@ -8,7 +8,7 @@ import Requisition from "@/models/Requisition";
 import AuditLog from "@/models/AuditLog";
 
 import { ROLES } from "@/constants/roles";
-import { REQUISITION_STATUS } from "@/constants/requisitionOptions";
+import { REQUISITION_STATUS, URGENCY_LEVELS } from "@/constants/requisitionOptions";
 
 function getAuth() {
   const token = cookies().get("token")?.value;
@@ -28,8 +28,9 @@ const CONSOLIDATION_ROLES = [
   ROLES.ADMIN,
 ];
 
-// Allowed urgency levels – adjust as needed.
-const ALLOWED_URGENCIES = ["low", "medium", "high"];
+// Kept in sync with the canonical urgency levels used across the app,
+// instead of a separately-maintained list that can drift out of sync.
+const ALLOWED_URGENCIES = URGENCY_LEVELS.map((u) => u.value);
 
 /*
  * --------------------------------------------------
@@ -298,6 +299,25 @@ export async function POST(request) {
     }
     const requestingUnits = [...unitMap.values()];
 
+    // Derive a shared collegeId/facultyId when every source unit agrees,
+    // even if they don't agree on department — this lets the approval
+    // chain still route a Dean's (same faculty) or Provost's (same
+    // college) multi-unit consolidation correctly. "N/A" only when the
+    // units genuinely disagree (Procurement/VC consolidating across
+    // colleges), where routing doesn't need a single college anyway.
+    const distinctColleges = [
+      ...new Set(requestingUnits.map((u) => u.collegeId)),
+    ];
+    const distinctFaculties = [
+      ...new Set(requestingUnits.map((u) => u.facultyId)),
+    ];
+    const commonCollegeId =
+      distinctColleges.length === 1 ? distinctColleges[0] : "N/A";
+    const commonFacultyId =
+      distinctColleges.length === 1 && distinctFaculties.length === 1
+        ? distinctFaculties[0]
+        : "N/A";
+
     const singleUnit =
       requestingUnits.length === 1 ? requestingUnits[0] : null;
 
@@ -314,8 +334,8 @@ export async function POST(request) {
       consolidatedBy: auth.sub,
       requestingUnits,
       // If multiple units, store "N/A" at top level – keep as string for compatibility.
-      collegeId: singleUnit?.collegeId || "N/A",
-      facultyId: singleUnit?.facultyId || "N/A",
+      collegeId: commonCollegeId,
+      facultyId: commonFacultyId,
       department: singleUnit?.department || "N/A",
       category: sourceCategory, // Use the validated source category.
       purpose: purpose.trim(),
@@ -394,4 +414,4 @@ export async function POST(request) {
       { status: 500 }
     );
   }
-      }
+  }
