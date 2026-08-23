@@ -49,19 +49,6 @@ export async function buildApprovalChain({
   department,
   estimatedCost,
 }) {
-  const college = getCollegeById(collegeId);
-
-  if (!college) {
-    throw new Error(`Unknown college: ${collegeId}`);
-  }
-
-  const routingType =
-    college.routingType || "standard";
-
-  const standardSequence =
-    ROUTING_CHAINS[routingType] ||
-    ROUTING_CHAINS.standard;
-
   const requiresGovernorApproval =
     Number(estimatedCost || 0) > ESCALATION_THRESHOLD;
 
@@ -73,7 +60,8 @@ export async function buildApprovalChain({
    * Procurement -> VC -> Procurement
    *
    * The Procurement Officer who created it must NOT approve
-   * their own requisition.
+   * their own requisition. University-wide, so no college lookup
+   * is needed here.
    */
   if (requesterRole === ROLES.PROCUREMENT) {
     roleSequence = [
@@ -107,11 +95,42 @@ export async function buildApprovalChain({
   }
 
   /*
-   * Normal requester:
+   * ADMIN creates (e.g. a university-wide consolidated requisition
+   * spanning multiple colleges):
+   *
+   * Admin -> VC -> Procurement
+   *
+   * University-wide, like Procurement — there is no single college
+   * to resolve a Dean/Provost approver against.
+   */
+  else if (requesterRole === ROLES.ADMIN) {
+    roleSequence = [
+      ROLES.VC,
+    ];
+  }
+
+  /*
+   * Normal requester (also covers Dean-created requisitions and
+   * Dean-created consolidations — both are scoped to a single
+   * faculty, so they always have a real collegeId to resolve
+   * routing type and the Provost approver against):
    *
    * Requester -> HOD -> Dean -> Provost -> VC -> Procurement
    */
   else {
+    const college = getCollegeById(collegeId);
+
+    if (!college) {
+      throw new Error(`Unknown college: ${collegeId}`);
+    }
+
+    const routingType =
+      college.routingType || "standard";
+
+    const standardSequence =
+      ROUTING_CHAINS[routingType] ||
+      ROUTING_CHAINS.standard;
+
     roleSequence = [...standardSequence];
 
     /*
@@ -135,14 +154,6 @@ export async function buildApprovalChain({
           role !== ROLES.HOD &&
           role !== ROLES.DEAN
       );
-    }
-
-    if (requesterRole === ROLES.PROVOST) {
-      roleSequence = [ROLES.VC];
-    }
-
-    if (requesterRole === ROLES.VC) {
-      roleSequence = [];
     }
   }
 
