@@ -8,9 +8,7 @@ import Requisition from "@/models/Requisition";
 import AuditLog from "@/models/AuditLog";
 
 import { ROLES } from "@/constants/roles";
-import {
-  REQUISITION_STATUS,
-} from "@/constants/requisitionOptions";
+import { REQUISITION_STATUS } from "@/constants/requisitionOptions";
 
 function getAuth() {
   const token = cookies().get("token")?.value;
@@ -30,6 +28,9 @@ const CONSOLIDATION_ROLES = [
   ROLES.ADMIN,
 ];
 
+// Allowed urgency levels – adjust as needed.
+const ALLOWED_URGENCIES = ["low", "medium", "high"];
+
 /*
  * --------------------------------------------------
  * POST /api/requisitions/consolidate
@@ -37,28 +38,6 @@ const CONSOLIDATION_ROLES = [
  *
  * Creates ONE new requisition from multiple
  * existing requisitions.
- *
- * Example:
- *
- * College A
- *   Faculty X
- *     Computer Science
- *       Printer x 3
- *
- * College B
- *   Faculty Y
- *     Mathematics
- *       Printer x 4
- *
- * becomes:
- *
- * ONE consolidated requisition
- *
- * Items:
- *
- * Printer
- *   Computer Science -> 3
- *   Mathematics      -> 4
  */
 export async function POST(request) {
   const auth = getAuth();
@@ -70,11 +49,7 @@ export async function POST(request) {
     );
   }
 
-  if (
-    !CONSOLIDATION_ROLES.includes(
-      auth.role
-    )
-  ) {
+  if (!CONSOLIDATION_ROLES.includes(auth.role)) {
     return NextResponse.json(
       {
         message:
@@ -89,7 +64,7 @@ export async function POST(request) {
 
     const {
       requisitionIds,
-      category,
+      category: providedCategory,
       urgency,
       purpose,
     } = body;
@@ -100,49 +75,46 @@ export async function POST(request) {
      * --------------------------------------------------
      */
 
-    if (
-      !Array.isArray(requisitionIds) ||
-      requisitionIds.length === 0
-    ) {
+    if (!Array.isArray(requisitionIds) || requisitionIds.length === 0) {
       return NextResponse.json(
-        {
-          message:
-            "Select at least one requisition.",
-        },
+        { message: "Select at least one requisition." },
         { status: 400 }
       );
     }
 
-    /*
-     * Prevent duplicate IDs.
-     */
-    const uniqueIds = [
-      ...new Set(
-        requisitionIds.map((id) =>
-          String(id)
-        )
-      ),
-    ];
-
-    if (
-      uniqueIds.length !==
-      requisitionIds.length
-    ) {
+    // Prevent duplicate IDs.
+    const uniqueIds = [...new Set(requisitionIds.map((id) => String(id)))];
+    if (uniqueIds.length !== requisitionIds.length) {
       return NextResponse.json(
-        {
-          message:
-            "A requisition cannot be selected more than once.",
-        },
+        { message: "A requisition cannot be selected more than once." },
         { status: 400 }
       );
     }
 
     if (!purpose?.trim()) {
       return NextResponse.json(
-        {
-          message:
-            "A purpose is required.",
-        },
+        { message: "A purpose is required." },
+        { status: 400 }
+      );
+    }
+
+    if (!providedCategory?.trim()) {
+      return NextResponse.json(
+        { message: "Category is required." },
+        { status: 400 }
+      );
+    }
+
+    // Validate urgency if provided, or make it required.
+    if (!urgency?.trim()) {
+      return NextResponse.json(
+        { message: "Urgency is required." },
+        { status: 400 }
+      );
+    }
+    if (!ALLOWED_URGENCIES.includes(urgency.toLowerCase())) {
+      return NextResponse.json(
+        { message: `Urgency must be one of: ${ALLOWED_URGENCIES.join(", ")}.` },
         { status: 400 }
       );
     }
@@ -155,36 +127,20 @@ export async function POST(request) {
      * --------------------------------------------------
      */
 
-    const sourceRequisitions =
-      await Requisition.find({
-        _id: {
-          $in: uniqueIds,
-        },
+    const sourceRequisitions = await Requisition.find({
+      _id: { $in: uniqueIds },
+      status: {
+        $in: [
+          REQUISITION_STATUS.PENDING,
+          REQUISITION_STATUS.RETURNED,
+          REQUISITION_STATUS.APPROVED,
+        ],
+      },
+      isConsolidated: { $ne: true },
+      consolidatedInto: { $exists: false },
+    }).lean();
 
-        status: {
-          $in: [
-            REQUISITION_STATUS.PENDING,
-            REQUISITION_STATUS.RETURNED,
-            REQUISITION_STATUS.APPROVED,
-          ],
-        },
-
-        isConsolidated: {
-          $ne: true,
-        },
-
-        consolidatedInto: {
-          $exists: false,
-        },
-      }).lean();
-
-    /*
-     * Every selected requisition must exist.
-     */
-    if (
-      sourceRequisitions.length !==
-      uniqueIds.length
-    ) {
+    if (sourceRequisitions.length !== uniqueIds.length) {
       return NextResponse.json(
         {
           message:
@@ -196,29 +152,56 @@ export async function POST(request) {
 
     /*
      * --------------------------------------------------
+     * CATEGORY CONSISTENCY CHECK
+     * --------------------------------------------------
+     */
+    const sourceCategories = [
+      ...new Set(sourceRequisitions.map((r) => r.category)),
+    ];
+    // Filter out undefined/null categories, though they shouldn't happen.
+    const validSourceCategories = sourceCategories.filter((c) => c != null);
+    if (validSourceCategories.length > 1) {
+      return NextResponse.json(
+        {
+          message:
+            "All requisitions in a consolidated requisition must belong to the same category.",
+        },
+        { status: 400 }
+      );
+    }
+    const sourceCategory = validSourceCategories[0]; // all same
+
+    // Ensure the provided category matches the source category.
+    if (providedCategory.trim() !== sourceCategory) {
+      return NextResponse.json(
+        {
+          message:
+            "Provided category does not match the category of the source requisitions.",
+        },
+        { status: 400 }
+      );
+    }
+
+    /*
+     * --------------------------------------------------
      * AUTHORITY CHECK
      * --------------------------------------------------
-     *
-     * This is extremely important.
-     *
-     * The frontend may display certain requisitions,
-     * but the API must enforce the same restriction.
      */
-
     for (const requisition of sourceRequisitions) {
-      /*
-       * DEAN
-       *
-       * Same college AND same faculty.
-       */
       if (auth.role === ROLES.DEAN) {
+        // Dean must have collegeId and facultyId in the token.
+        if (!auth.collegeId || !auth.facultyId) {
+          return NextResponse.json(
+            {
+              message:
+                "Dean role is missing required college/faculty information.",
+            },
+            { status: 403 }
+          );
+        }
         if (
-          String(
-            requisition.collegeId
-          ) !== String(auth.collegeId) ||
-          String(
-            requisition.facultyId
-          ) !== String(auth.facultyId)
+          String(requisition.collegeId) !== String(auth.collegeId) ||
+          String(requisition.facultyId) !== String(auth.facultyId)
         ) {
           return NextResponse.json(
             {
@@ -230,17 +213,17 @@ export async function POST(request) {
         }
       }
 
-      /*
-       * PROVOST
-       *
-       * Same college.
-       */
       if (auth.role === ROLES.PROVOST) {
-        if (
-          String(
-            requisition.collegeId
-          ) !== String(auth.collegeId)
-        ) {
+        if (!auth.collegeId) {
+          return NextResponse.json(
+            {
+              message:
+                "Provost role is missing required college information.",
+            },
+            { status: 403 }
+          );
+        }
+        if (String(requisition.collegeId) !== String(auth.collegeId)) {
           return NextResponse.json(
             {
               message:
@@ -250,86 +233,35 @@ export async function POST(request) {
           );
         }
       }
-
-      /*
-       * VC
-       *
-       * University-wide.
-       */
-
-      /*
-       * PROCUREMENT
-       *
-       * University-wide.
-       */
-
-      /*
-       * ADMIN
-       *
-       * University-wide.
-       */
+      // VC, PROCUREMENT, ADMIN have university‑wide access – no additional checks.
     }
 
     /*
      * --------------------------------------------------
      * BUILD DEPARTMENT-SPECIFIC ITEMS
      * --------------------------------------------------
-     *
-     * We DO NOT simply merge identical item names.
-     *
-     * Each source item remains traceable to its
-     * original organizational unit.
-     *
-     * Example:
-     *
-     * Printer — Computer Science — 3
-     * Printer — Mathematics — 4
-     *
-     * Both remain separate records.
      */
-
     const consolidatedItems = [];
-
     for (const requisition of sourceRequisitions) {
       for (const item of requisition.items || []) {
         consolidatedItems.push({
           name: item.name,
-
-          requestingCollegeId:
-            requisition.collegeId,
-
-          requestingFacultyId:
-            requisition.facultyId,
-
-          requestingDepartment:
-            requisition.department,
-
-          quantity:
-            Number(item.quantity || 0),
-
-          unitCost:
-            Number(item.unitCost || 0),
-
-          totalCost:
-            Number(
-              item.totalCost ??
-                (
-                  Number(item.quantity || 0) *
-                  Number(item.unitCost || 0)
-                )
-            ),
+          requestingCollegeId: requisition.collegeId,
+          requestingFacultyId: requisition.facultyId,
+          requestingDepartment: requisition.department,
+          quantity: Number(item.quantity || 0),
+          unitCost: Number(item.unitCost || 0),
+          totalCost: Number(
+            item.totalCost ??
+              (Number(item.quantity || 0) * Number(item.unitCost || 0))
+          ),
         });
       }
     }
 
-    if (
-      consolidatedItems.length === 0
-    ) {
+    if (consolidatedItems.length === 0) {
       return NextResponse.json(
-        {
-          message:
-            "The selected requisitions contain no items.",
-        },
+        { message: "The selected requisitions contain no items." },
         { status: 400 }
       );
     }
@@ -339,233 +271,127 @@ export async function POST(request) {
      * CALCULATE TOTAL
      * --------------------------------------------------
      */
-
-    const estimatedCost =
-      consolidatedItems.reduce(
-        (sum, item) =>
-          sum +
-          Number(
-            item.totalCost || 0
-          ),
-        0
-      );
+    const estimatedCost = consolidatedItems.reduce(
+      (sum, item) => sum + Number(item.totalCost || 0),
+      0
+    );
 
     /*
      * --------------------------------------------------
-     * ORGANIZATIONAL UNITS
+     * ORGANIZATIONAL UNITS (deduplicated)
      * --------------------------------------------------
-     *
-     * Remove duplicates.
      */
-
     const unitMap = new Map();
-
     for (const requisition of sourceRequisitions) {
       const key = [
         requisition.collegeId,
         requisition.facultyId,
         requisition.department,
       ].join("|");
-
       if (!unitMap.has(key)) {
         unitMap.set(key, {
-          collegeId:
-            requisition.collegeId,
-
-          facultyId:
-            requisition.facultyId,
-
-          department:
-            requisition.department,
+          collegeId: requisition.collegeId,
+          facultyId: requisition.facultyId,
+          department: requisition.department,
         });
       }
     }
-
-    const requestingUnits = [
-      ...unitMap.values(),
-    ];
-
-    /*
-     * --------------------------------------------------
-     * TOP-LEVEL ORGANIZATION
-     * --------------------------------------------------
-     *
-     * A consolidated requisition can represent
-     * multiple organizations.
-     *
-     * Therefore:
-     *
-     * collegeId/facultyId/department
-     *
-     * are only populated when the consolidated
-     * requisition represents exactly one unit.
-     *
-     * The detailed organization is stored in:
-     *
-     * requestingUnits
-     *
-     * and each item also contains its source.
-     */
+    const requestingUnits = [...unitMap.values()];
 
     const singleUnit =
-      requestingUnits.length === 1
-        ? requestingUnits[0]
-        : null;
+      requestingUnits.length === 1 ? requestingUnits[0] : null;
 
     /*
      * --------------------------------------------------
-     * CREATE CONSOLIDATED REQUISITION
+     * CREATE CONSOLIDATED REQUISITION (as DRAFT)
      * --------------------------------------------------
-     *
-     * IMPORTANT:
-     *
-     * It starts as a DRAFT.
-     *
-     * The creator can review it before submitting.
      */
-    const consolidated =
-      await Requisition.create({
-        requester: auth.sub,
-
-        requesterRole:
-          auth.role,
-
-        isConsolidated: true,
-
-        sourceRequisitions:
-          sourceRequisitions.map(
-            (r) => r._id
-          ),
-
-        consolidatedBy:
-          auth.sub,
-
-        requestingUnits,
-
-        /*
-         * If multiple colleges/faculties are
-         * represented, use N/A at the top level.
-         *
-         * The actual source organization remains
-         * available in requestingUnits and items.
-         */
-        collegeId:
-          singleUnit?.collegeId ||
-          "N/A",
-
-        facultyId:
-          singleUnit?.facultyId ||
-          "N/A",
-
-        department:
-          singleUnit?.department ||
-          "N/A",
-
-        category,
-
-        purpose: purpose.trim(),
-
-        urgency,
-
-        items:
-          consolidatedItems,
-
-        estimatedCost,
-
-        status:
-          REQUISITION_STATUS.DRAFT,
-
-        awaitingRequesterAction:
-          false,
-
-        currentStepIndex: 0,
-
-        approvalChain: [],
-      });
+    const consolidated = await Requisition.create({
+      requester: auth.sub,
+      requesterRole: auth.role,
+      isConsolidated: true,
+      sourceRequisitions: sourceRequisitions.map((r) => r._id),
+      consolidatedBy: auth.sub,
+      requestingUnits,
+      // If multiple units, store "N/A" at top level – keep as string for compatibility.
+      collegeId: singleUnit?.collegeId || "N/A",
+      facultyId: singleUnit?.facultyId || "N/A",
+      department: singleUnit?.department || "N/A",
+      category: sourceCategory, // Use the validated source category.
+      purpose: purpose.trim(),
+      urgency: urgency.trim().toLowerCase(),
+      items: consolidatedItems,
+      estimatedCost,
+      status: REQUISITION_STATUS.DRAFT,
+      awaitingRequesterAction: false,
+      currentStepIndex: 0,
+      approvalChain: [],
+    });
 
     /*
      * --------------------------------------------------
-     * LINK SOURCE REQUISITIONS
+     * LINK SOURCE REQUISITIONS (with concurrency safety)
      * --------------------------------------------------
      *
-     * Mark the source requisitions so they cannot
-     * accidentally be consolidated again.
+     * We use updateMany with an extra condition to ensure that
+     * no source has been consolidated by another simultaneous request.
      */
-    await Requisition.updateMany(
+    const updateResult = await Requisition.updateMany(
       {
-        _id: {
-          $in: sourceRequisitions.map(
-            (r) => r._id
-          ),
-        },
+        _id: { $in: sourceRequisitions.map((r) => r._id) },
+        // Only update if they are still eligible (no consolidatedInto yet).
+        consolidatedInto: { $exists: false },
+        isConsolidated: { $ne: true },
       },
       {
         $set: {
-          consolidatedInto:
-            consolidated._id,
-
-          consolidatedAt:
-            new Date(),
+          consolidatedInto: consolidated._id,
+          consolidatedAt: new Date(),
         },
       }
     );
+
+    // If not all sources were updated, rollback the new requisition and error.
+    if (updateResult.modifiedCount !== sourceRequisitions.length) {
+      // Delete the newly created consolidated requisition.
+      await Requisition.deleteOne({ _id: consolidated._id });
+      return NextResponse.json(
+        {
+          message:
+            "One or more requisitions were consolidated by another request. Please try again.",
+        },
+        { status: 409 } // Conflict
+      );
+    }
 
     /*
      * --------------------------------------------------
      * AUDIT LOG
      * --------------------------------------------------
      */
-
     await AuditLog.create({
       actor: auth.sub,
-
-      action:
-        "requisition.consolidated_create",
-
-      entityType:
-        "Requisition",
-
-      entityId:
-        consolidated._id,
-
+      action: "requisition.consolidated_create",
+      entityType: "Requisition",
+      entityId: consolidated._id,
       details: {
-        requesterRole:
-          auth.role,
-
-        sourceRequisitions:
-          sourceRequisitions.map(
-            (r) => String(r._id)
-          ),
-
+        requesterRole: auth.role,
+        sourceRequisitions: sourceRequisitions.map((r) => String(r._id)),
         requestingUnits,
-
-        itemCount:
-          consolidatedItems.length,
-
+        itemCount: consolidatedItems.length,
         estimatedCost,
       },
     });
 
     return NextResponse.json(
-      {
-        requisition:
-          consolidated,
-      },
+      { requisition: consolidated },
       { status: 201 }
     );
   } catch (error) {
-    console.error(
-      "Consolidated requisition error:",
-      error
-    );
-
+    console.error("Consolidated requisition error:", error);
     return NextResponse.json(
-      {
-        message:
-          error.message ||
-          "Failed to create consolidated requisition.",
-      },
+      { message: error.message || "Failed to create consolidated requisition." },
       { status: 500 }
     );
   }
-          }
+      }
