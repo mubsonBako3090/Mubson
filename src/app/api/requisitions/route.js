@@ -148,82 +148,319 @@ export async function GET(request) {
    *
    * Procurement sees:
    *
-   * 1. Requisitions they personally initiated.
-   *
-   * 2. Requisitions assigned to them for processing.
-   *
-   * 3. Requisitions ready for Procurement processing
-   *    when no specific officer has been assigned yet.
-   */
-  else if (auth.role === ROLES.PROCUREMENT) {
-    const visibilityConditions = [
-      /*
-       * Requisitions initiated by this Procurement Officer.
-       */
-      {
-        requester: auth.sub,
-      },
+// --------------------------------------------
+// GET /api/requisitions
+// --------------------------------------------
+export async function GET(request) {
+  const auth = getAuth();
 
-      /*
-       * Requisitions specifically assigned
-       * to this Procurement Officer.
-       */
-      {
-        procurementOfficer: auth.sub,
-      },
-
-      /*
-       * Approved requisitions waiting for
-       * Procurement processing.
-       *
-       * procurementOfficer may still be empty
-       * when the system has not assigned one.
-       */
-      {
-        status: REQUISITION_STATUS.APPROVED,
-        procurementStatus: "ready",
-      },
-    ];
-
-    query = {
-      $or: visibilityConditions,
-    };
-
-    if (status) {
-      query.status = status;
-    }
+  if (!auth) {
+    return NextResponse.json(
+      { message: "Unauthorized" },
+      { status: 401 }
+    );
   }
+
+  await connectDB();
+
+  const { searchParams } = new URL(request.url);
+  const status = searchParams.get("status");
+
+  /*
+   * --------------------------------------------------
+   * ADMIN
+   * --------------------------------------------------
+   *
+   * Admin can see all requisitions.
+   */
+  if (auth.role === ROLES.ADMIN) {
+    const query = status
+      ? { status }
+      : {};
+
+    const requisitions =
+      await Requisition.find(query)
+        .sort({ createdAt: -1 })
+        .populate(
+          "requester",
+          "fullName email role"
+        )
+        .lean();
+
+    return NextResponse.json({
+      requisitions,
+    });
+  }
+
+  /*
+   * --------------------------------------------------
+   * LOAD REQUISITIONS RELEVANT TO THIS USER
+   * --------------------------------------------------
+   *
+   * We first get:
+   *
+   * 1. Requisitions created by the current user.
+   *
+   * 2. For approval roles, requisitions that are
+   *    potentially somewhere in their approval chain.
+   *
+   * 3. For Procurement, requisitions assigned to them
+   *    or ready for Procurement processing.
+   *
+   * We then apply precise current-step filtering.
+   */
+
+  let requisitions = [];
 
   /*
    * --------------------------------------------------
    * REQUESTER
    * --------------------------------------------------
    *
-   * Requesters can ONLY see requisitions
-   * they personally created.
+   * A normal requester sees ONLY requisitions
+   * they created.
    */
-  else {
-    query = {
+  if (auth.role === ROLES.REQUESTER) {
+    const query = {
       requester: auth.sub,
     };
 
     if (status) {
       query.status = status;
     }
+
+    requisitions =
+      await Requisition.find(query)
+        .sort({ createdAt: -1 })
+        .populate(
+          "requester",
+          "fullName email role"
+        )
+        .lean();
+
+    return NextResponse.json({
+      requisitions,
+    });
   }
 
-  const requisitions = await Requisition.find(query)
-    .sort({ createdAt: -1 })
-    .populate(
-      "requester",
-      "fullName email role"
-    )
-    .lean();
+  /*
+   * --------------------------------------------------
+   * APPROVAL ROLES
+   * --------------------------------------------------
+   *
+   * HOD
+   * Dean
+   * Provost
+   * VC
+   *
+   * They see:
+   *
+   * 1. Requisitions they personally created.
+   *
+   * 2. Requisitions currently waiting for THEIR
+   *    approval.
+   *
+   * IMPORTANT:
+   *
+   * We do NOT simply search for:
+   *
+   * approvalChain.approver === auth.sub
+   *
+   * because that would also return requisitions
+   * that have already passed this approver.
+   *
+   * Instead, we check:
+   *
+   * approvalChain[currentStepIndex]
+   */
+  if (
+    APPROVER_ROLES.includes(auth.role)
+  ) {
+    const query = {
+      $or: [
+        {
+          requester: auth.sub,
+        },
+        {
+          status: {
+            $in: [
+              REQUISITION_STATUS.PENDING,
+              REQUISITION_STATUS.RETURNED,
+            ],
+          },
+
+          awaitingRequesterAction: {
+            $ne: true,
+          },
+
+          "approvalChain.approver":
+            auth.sub,
+        },
+      ],
+    };
+
+    /*
+     * Do not apply status directly to the whole
+     * query before filtering because we need to
+     * preserve the user's own requisitions too.
+     */
+    if (status) {
+      query.$or = query.$or.map(
+        (condition) => ({
+          ...condition,
+          status,
+        })
+      );
+    }
+
+    const possibleRequisitions =
+      await Requisition.find(query)
+        .sort({ createdAt: -1 })
+        .populate(
+          "requester",
+          "fullName email role"
+        )
+        .lean();
+
+    /*
+     * IMPORTANT:
+     *
+     * Only include an approval requisition if
+     * this user's step is the CURRENT step.
+     *
+     * The user's own requisitions are always included.
+     */
+    requisitions =
+      possibleRequisitions.filter(
+        (requisition) => {
+          /*
+           * User's own requisition.
+           */
+          if (
+            String(
+              requisition.requester?._id ||
+                requisition.requester
+            ) === String(auth.sub)
+          ) {
+            return true;
+          }
+
+          /*
+           * Requisition awaiting this user's
+           * current approval.
+           */
+          const currentStep =
+            requisition.approvalChain?.[
+              requisition.currentStepIndex
+            ];
+
+          return (
+            currentStep &&
+            currentStep.type ===
+              "approval" &&
+            String(
+              currentStep.approver
+            ) === String(auth.sub)
+          );
+        }
+      );
+
+    return NextResponse.json({
+      requisitions,
+    });
+  }
+
+  /*
+   * --------------------------------------------------
+   * PROCUREMENT
+   * --------------------------------------------------
+   *
+   * Procurement is NOT an approval authority.
+   *
+   * Procurement sees:
+   *
+   * 1. Requisitions they personally initiated.
+   *
+   * 2. Requisitions assigned to them.
+   *
+   * 3. Ready requisitions available to Procurement.
+   */
+  if (
+    auth.role === ROLES.PROCUREMENT
+  ) {
+    const query = {
+      $or: [
+        {
+          requester: auth.sub,
+        },
+
+        {
+          procurementOfficer:
+            auth.sub,
+        },
+
+        {
+          status:
+            REQUISITION_STATUS.APPROVED,
+
+          procurementStatus:
+            "ready",
+        },
+      ],
+    };
+
+    if (status) {
+      query.$or = query.$or.map(
+        (condition) => ({
+          ...condition,
+          status,
+        })
+      );
+    }
+
+    requisitions =
+      await Requisition.find(query)
+        .sort({ createdAt: -1 })
+        .populate(
+          "requester",
+          "fullName email role"
+        )
+        .lean();
+
+    return NextResponse.json({
+      requisitions,
+    });
+  }
+
+  /*
+   * --------------------------------------------------
+   * FALLBACK
+   * --------------------------------------------------
+   *
+   * Any unexpected role gets only its own
+   * requisitions.
+   */
+  const query = {
+    requester: auth.sub,
+  };
+
+  if (status) {
+    query.status = status;
+  }
+
+  requisitions =
+    await Requisition.find(query)
+      .sort({ createdAt: -1 })
+      .populate(
+        "requester",
+        "fullName email role"
+      )
+      .lean();
 
   return NextResponse.json({
     requisitions,
   });
-}
+      }
 
 // --------------------------------------------
 // POST /api/requisitions
