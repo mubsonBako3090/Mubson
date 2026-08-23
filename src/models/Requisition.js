@@ -186,46 +186,26 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * --------------------------------------------------
-     * CONSOLIDATED REQUISITION
-     * --------------------------------------------------
-     *
-     * false:
-     *   Normal requisition.
-     *
-     * true:
-     *   Requisition combines requirements from
-     *   multiple requisitions or organizational units.
-     */
-    isConsolidated: {
-      type: Boolean,
-      default: false,
-    },
+ * --------------------------------------------------
+ * CONSOLIDATED REQUISITION
+ * --------------------------------------------------
+ */
 
-    /*
-     * --------------------------------------------------
-     * SOURCE REQUISITIONS
-     * --------------------------------------------------
-     *
-     * Stores the original requisitions that were
-     * combined into this consolidated requisition.
-     *
-     * Example:
-     *
-     * [
-     *   requisitionA,
-     *   requisitionB,
-     *   requisitionC
-     * ]
-     */
-    sourceRequisitions: {
-  type: [
-    {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Requisition",
-    },
-  ],
-  default: [],
+isConsolidated: {
+  type: Boolean,
+  default: false,
+},
+
+sourceRequisitions: [
+  {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Requisition",
+  },
+],
+
+consolidatedBy: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "User",
 },
 
 consolidatedInto: {
@@ -233,55 +213,26 @@ consolidatedInto: {
   ref: "Requisition",
 },
 
-    /*
-     * --------------------------------------------------
-     * CONSOLIDATED BY
-     * --------------------------------------------------
-     *
-     * User who created the consolidated requisition.
-     *
-     * Possible roles:
-     *   Dean
-     *   Provost
-     *   VC
-     *   Procurement
-     */
-    consolidatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+consolidatedAt: {
+  type: Date,
+},
+
+requestingUnits: [
+  {
+    collegeId: {
+      type: String,
+      required: true,
     },
 
-    /*
-     * --------------------------------------------------
-     * REQUESTING UNITS
-     * --------------------------------------------------
-     *
-     * Stores the organizational units represented
-     * in a consolidated requisition.
-     *
-     * These are snapshots so that future changes
-     * to departments/faculties/colleges do not
-     * change historical requisition records.
-     */
-    requestingUnits: {
-      type: [
-        {
-          collegeId: {
-            type: String,
-            required: true,
-          },
-
-          facultyId: {
-            type: String,
-          },
-
-          department: {
-            type: String,
-          },
-        },
-      ],
-      default: [],
+    facultyId: {
+      type: String,
     },
+
+    department: {
+      type: String,
+    },
+  },
+],
 
     /*
      * --------------------------------------------------
