@@ -16,17 +16,23 @@ export default function RequisitionWizardStep1({
   data,
   onChange,
   requesterRole,
+  requesterCollegeId,
+  requesterFacultyId,
 }) {
-  const isProcurement =
-    requesterRole === ROLES.PROCUREMENT;
+  const showRequestingOrganization =
+    requesterRole === ROLES.PROCUREMENT ||
+    requesterRole === ROLES.DEAN ||
+    requesterRole === ROLES.PROVOST;
 
   return (
     <div className={styles.wrapper}>
       {/* ------------------------------------------------
-          PROCUREMENT REQUESTING ORGANIZATION
+          REQUESTING ORGANIZATION
+          (Procurement: fully open. Dean/Provost: locked
+          to their own college/faculty, see component.)
       ------------------------------------------------ */}
 
-      {isProcurement && (
+      {showRequestingOrganization && (
         <RequestingOrganizationSelect
           value={{
             collegeId:
@@ -39,6 +45,9 @@ export default function RequisitionWizardStep1({
               data.department || "",
           }}
           onChange={onChange}
+          requesterRole={requesterRole}
+          homeCollegeId={requesterCollegeId}
+          homeFacultyId={requesterFacultyId}
         />
       )}
 
@@ -141,4 +150,4 @@ export default function RequisitionWizardStep1({
       </div>
     </div>
   );
-      }
+}
