@@ -6,7 +6,10 @@ import {
   buildApprovalChain,
   isEscalated,
 } from "@/lib/routing";
-
+import {
+  getCollegeById,
+  getFaculty,
+} from "@/constants/colleges";
 import {
   REQUISITION_STATUS,
 } from "@/constants/requisitionOptions";
@@ -112,6 +115,102 @@ function getRequestingOrganization({
       department:
         payload.department ||
         "N/A",
+    };
+  }
+
+  /*
+   * DEAN can initiate a requisition on behalf of any
+   * department within their own faculty.
+   *
+   * College and faculty are always locked to the Dean's
+   * own — never taken from the payload — so a Dean can
+   * never route a requisition through a different
+   * faculty's approval chain. Only department is chosen
+   * from the payload, and it's validated against the
+   * Dean's own faculty below.
+   */
+  if (requesterUser.role === ROLES.DEAN) {
+    const faculty = getFaculty(
+      requesterUser.collegeId,
+      requesterUser.facultyId
+    );
+
+    const requestedDepartment =
+      payload.department ||
+      requesterUser.department;
+
+    const isValidDepartment =
+      faculty?.departments?.includes(
+        requestedDepartment
+      );
+
+    if (!isValidDepartment) {
+      throw new Error(
+        "Selected department is not part of your faculty."
+      );
+    }
+
+    return {
+      collegeId:
+        requesterUser.collegeId,
+
+      facultyId:
+        requesterUser.facultyId,
+
+      department:
+        requestedDepartment,
+    };
+  }
+
+  /*
+   * PROVOST can initiate a requisition on behalf of any
+   * faculty/department within their own college.
+   *
+   * College is always locked to the Provost's own — never
+   * taken from the payload. Faculty and department are
+   * chosen from the payload and validated against the
+   * Provost's own college below.
+   */
+  if (requesterUser.role === ROLES.PROVOST) {
+    const requestedFacultyId =
+      payload.facultyId ||
+      requesterUser.facultyId;
+
+    const faculty = getFaculty(
+      requesterUser.collegeId,
+      requestedFacultyId
+    );
+
+    if (!faculty) {
+      throw new Error(
+        "Selected faculty is not part of your college."
+      );
+    }
+
+    const requestedDepartment =
+      payload.department ||
+      requesterUser.department;
+
+    const isValidDepartment =
+      faculty.departments?.includes(
+        requestedDepartment
+      );
+
+    if (!isValidDepartment) {
+      throw new Error(
+        "Selected department is not part of the selected faculty."
+      );
+    }
+
+    return {
+      collegeId:
+        requesterUser.collegeId,
+
+      facultyId:
+        requestedFacultyId,
+
+      department:
+        requestedDepartment,
     };
   }
 
