@@ -211,7 +211,24 @@ export default function NewRequisitionPage() {
         return;
       }
     }
+if (
+      user?.role ===
+      ROLES.PROVOST
+    ) {
+      if (
+        !data.collegeId ||
+        !data.facultyId ||
+        !data.department
+      ) {
+        toast.error(
+          "Please select the requesting College, Faculty and Department."
+        );
 
+        setStep(0);
+
+        return;
+      }
+}
     const saved =
       await saveDraft({
         silent: true,
