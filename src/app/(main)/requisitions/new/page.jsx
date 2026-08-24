@@ -310,15 +310,21 @@ if (
           styles.stepBody
         }
       >
-        {step === 0 && (
-          <RequisitionWizardStep1
-            data={data}
-            onChange={update}
-            requesterRole={
-              user.role
-            }
-          />
-        )}
+       {step === 0 && (
+  <RequisitionWizardStep1
+    data={data}
+    onChange={update}
+    requesterRole={
+      user.role
+    }
+    requesterCollegeId={
+      user.collegeId
+    }
+    requesterFacultyId={
+      user.facultyId
+    }
+  />
+)}
 
         {step === 1 && (
           <RequisitionWizardStep2
