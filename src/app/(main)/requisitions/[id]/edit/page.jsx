@@ -293,14 +293,20 @@ export default function EditRequisitionPage() {
         }
       >
         {step === 0 && (
-          <RequisitionWizardStep1
-            data={data}
-            onChange={update}
-            requesterRole={
-              requesterRole
-            }
-          />
-        )}
+  <RequisitionWizardStep1
+    data={data}
+    onChange={update}
+    requesterRole={
+      user.role
+    }
+    requesterCollegeId={
+      user.collegeId
+    }
+    requesterFacultyId={
+      user.facultyId
+    }
+  />
+)}
 
         {step === 1 && (
           <RequisitionWizardStep2
