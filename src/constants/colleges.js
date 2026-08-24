@@ -1,11 +1,5 @@
 // KASU's 8 colleges, with their faculties and departments.
-// Department lists below are seeded with the examples confirmed so far —
-// expand each `departments` array with the full official list when available.
-//
-// `routingType` tells lib/routing.js which approval chain to use:
-//   "standard"     -> HOD -> Dean -> Provost -> VC
-//   "postgraduate" -> Postgraduate Programme Coordinator -> Provost of Postgraduate Studies -> VC
-//   "basicStudies" -> Coordinator/Lecturer-in-Charge -> Director of Basic Studies -> VC
+// Full official list as of 2026 – grouped by college and faculty.
 
 export const COLLEGES = [
   {
@@ -21,12 +15,12 @@ export const COLLEGES = [
       {
         id: "basic-clinical-sciences",
         name: "Faculty of Basic Clinical Sciences",
-        departments: ["Chemical Pathology", "Community Medicine"],
+        departments: ["Chemical Pathology", "Community Medicine", "Medical Microbiology & Parasitology"],
       },
       {
         id: "clinical-sciences",
         name: "Faculty of Clinical Sciences",
-        departments: ["Surgery"],
+        departments: ["Surgery", "Internal Medicine", "Obstetrics & Gynaecology", "Paediatrics"],
       },
     ],
   },
@@ -38,17 +32,27 @@ export const COLLEGES = [
       {
         id: "science",
         name: "Faculty of Science",
-        departments: ["Biological Sciences", "Biochemistry", "Microbiology", "Chemistry", "Physics", "Mathematical Sciences"],
+        departments: [
+          "Biological Sciences",
+          "Biochemistry",
+          "Microbiology",
+          "Chemistry",
+          "Physics",
+          "Mathematical Sciences",
+          "Statistics",
+          "Geology",
+          "Geophysics",
+        ],
       },
       {
         id: "computing",
         name: "Faculty of Computing",
-        departments: ["Computer Science"],
+        departments: ["Computer Science", "Cyber Security", "Data Science", "Information Systems", "Software Engineering"],
       },
       {
         id: "engineering",
         name: "Faculty of Engineering",
-        departments: ["Computer Engineering", "Electrical & Electronics Engineering"],
+        departments: ["Computer Engineering", "Electrical & Electronics Engineering", "Mechanical Engineering"],
       },
     ],
   },
@@ -60,12 +64,28 @@ export const COLLEGES = [
       {
         id: "social-sciences",
         name: "Faculty of Social Sciences",
-        departments: ["Economics", "Political Science", "Sociology", "Geography", "Mass Communication"],
+        departments: [
+          "Economics",
+          "Political Science",
+          "Sociology",
+          "Geography",
+          "Mass Communication",
+          "Criminology & Security Studies",
+          "International Relations & Diplomacy",
+        ],
       },
       {
         id: "management-sciences",
         name: "Faculty of Management Sciences",
-        departments: ["Accounting", "Business Administration", "Banking & Finance", "Public Administration"],
+        departments: [
+          "Accounting",
+          "Business Administration",
+          "Banking & Finance",
+          "Public Administration",
+          "Marketing",
+          "Entrepreneurship",
+          "Industrial Relations & Personnel Management",
+        ],
       },
     ],
   },
@@ -77,12 +97,34 @@ export const COLLEGES = [
       {
         id: "arts",
         name: "Faculty of Arts",
-        departments: ["English and Drama", "History", "Arabic", "Islamic Studies", "Christian Religious Studies"],
+        departments: [
+          "English and Drama",
+          "History",
+          "Arabic",
+          "Islamic Studies",
+          "Christian Religious Studies",
+          "French",
+          "Hausa",
+          "Linguistics",
+          "Theatre Arts",
+        ],
       },
       {
         id: "education",
         name: "Faculty of Education",
-        departments: ["Science Education", "Arts Education"],
+        departments: [
+          "Science Education",
+          "Arts Education",
+          "Education & Biology",
+          "Education & Chemistry",
+          "Education & Physics",
+          "Education & Mathematics",
+          "Education & Economics",
+          "Education & Geography",
+          "Education & Arabic",
+          "Education & Islamic Studies",
+          "Education & Christian Religious Studies",
+        ],
       },
       {
         id: "law",
@@ -99,12 +141,19 @@ export const COLLEGES = [
       {
         id: "agriculture",
         name: "Faculty of Agriculture",
-        departments: ["Agricultural Economics", "Animal Science", "Crop Protection"],
+        departments: [
+          "Agricultural Economics",
+          "Animal Science",
+          "Crop Protection",
+          "Agricultural Extension & Rural Development",
+          "Plant Protection",
+          "Soil Science",
+        ],
       },
       {
         id: "environmental-sciences",
         name: "Faculty of Environmental Sciences",
-        departments: ["Architecture", "Estate Management", "Quantity Surveying", "Environmental Management"],
+        departments: ["Architecture", "Estate Management", "Quantity Surveying", "Environmental Management", "Building"],
       },
     ],
   },
@@ -145,12 +194,13 @@ export const COLLEGES = [
       {
         id: "basic-studies-programmes",
         name: "Basic Studies Programmes",
-        departments: ["Remedial Studies", "IJMB", "Foundational Pathway Programmes"],
+        departments: ["Remedial Studies", "IJMB", "Foundational Pathway Programmes", "Pre-Degree"],
       },
     ],
   },
 ];
 
+// Helper functions (unchanged)
 export function getCollegeById(collegeId) {
   return COLLEGES.find((c) => c.id === collegeId) || null;
 }
@@ -159,4 +209,4 @@ export function getFaculty(collegeId, facultyId) {
   const college = getCollegeById(collegeId);
   if (!college) return null;
   return college.faculties.find((f) => f.id === facultyId) || null;
-}
+        }
