@@ -16,6 +16,18 @@ const urgencyValues =
  * --------------------------------------------------
  */
 
+const requestingUnitSchema =
+  Joi.object({
+    collegeId: Joi.string()
+      .required(),
+
+    facultyId: Joi.string()
+      .required(),
+
+    department: Joi.string()
+      .required(),
+  });
+
 const itemSchema =
   Joi.object({
     name: Joi.string()
@@ -32,6 +44,15 @@ const itemSchema =
     totalCost: Joi.number()
       .min(0)
       .required(),
+
+    requestingCollegeId: Joi.string()
+      .allow(null, ""),
+
+    requestingFacultyId: Joi.string()
+      .allow(null, ""),
+
+    requestingDepartment: Joi.string()
+      .allow(null, ""),
   });
 
 const draftItemSchema =
@@ -50,6 +71,15 @@ const draftItemSchema =
     totalCost: Joi.number()
       .min(0)
       .allow(null),
+
+    requestingCollegeId: Joi.string()
+      .allow(null, ""),
+
+    requestingFacultyId: Joi.string()
+      .allow(null, ""),
+
+    requestingDepartment: Joi.string()
+      .allow(null, ""),
   });
 
 /*
@@ -84,8 +114,13 @@ export const draftRequisitionSchema =
       .items(draftItemSchema),
 
     /*
-     * Procurement requesting organization.
+     * Procurement/Dean/Provost requesting
+     * organization — one or more units.
      */
+    requestingUnits: Joi.array()
+      .items(requestingUnitSchema)
+      .allow(null),
+
     collegeId: Joi.string()
       .allow(null, ""),
 
@@ -127,6 +162,10 @@ export const submitRequisitionSchema =
      * These are checked separately by the
      * requisition service according to role.
      */
+    requestingUnits: Joi.array()
+      .items(requestingUnitSchema)
+      .allow(null),
+
     collegeId: Joi.string()
       .allow(null, ""),
 
