@@ -27,7 +27,11 @@ export default function RequisitionWizardStep3({ data, requisitionId, onAttachme
 
       <section className={styles.section}>
         <h4 className={styles.sectionTitle}>Items</h4>
-        <RequisitionItemsTable items={data.items || []} readOnly />
+        <RequisitionItemsTable
+          items={data.items || []}
+          requestingUnits={data.requestingUnits}
+          readOnly
+        />
       </section>
 
       <section className={styles.section}>
