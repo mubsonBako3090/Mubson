@@ -6,15 +6,17 @@ import {
   buildApprovalChain,
   isEscalated,
 } from "@/lib/routing";
-import {
-  getCollegeById,
-  getFaculty,
-} from "@/constants/colleges";
+
 import {
   REQUISITION_STATUS,
 } from "@/constants/requisitionOptions";
 
 import { ROLES } from "@/constants/roles";
+
+import {
+  getCollegeById,
+  getFaculty,
+} from "@/constants/colleges";
 
 import {
   sendRequisitionSubmittedEmail,
@@ -94,6 +96,71 @@ async function generateRequisitionNumber() {
  * This is the key Option B change.
  */
 
+function unitKey(unit) {
+  return [
+    unit.collegeId,
+    unit.facultyId,
+    unit.department,
+  ].join("|");
+}
+
+/*
+ * Derive a shared collegeId/facultyId across a set of
+ * requesting units when they agree, even if department
+ * differs — "N/A" only when the units genuinely disagree
+ * (e.g. Procurement/VC spanning multiple colleges), where
+ * routing doesn't need a single college anyway. Mirrors the
+ * same derivation used by the consolidate-existing-requisitions
+ * endpoint.
+ */
+function deriveCommonCollegeFaculty(units) {
+  const distinctColleges = [
+    ...new Set(
+      units.map((u) => u.collegeId)
+    ),
+  ];
+
+  const distinctFaculties = [
+    ...new Set(
+      units.map((u) => u.facultyId)
+    ),
+  ];
+
+  const commonCollegeId =
+    distinctColleges.length === 1
+      ? distinctColleges[0]
+      : "N/A";
+
+  const commonFacultyId =
+    distinctColleges.length === 1 &&
+    distinctFaculties.length === 1
+      ? distinctFaculties[0]
+      : "N/A";
+
+  return {
+    commonCollegeId,
+    commonFacultyId,
+  };
+}
+
+/*
+ * Procurement/Dean/Provost can each pick one or more
+ * requesting units (College/Faculty/Department) for a
+ * requisition:
+ *
+ *  - Procurement: fully open, university-wide.
+ *  - Dean: college + faculty locked to their own; only
+ *    department varies, validated against their faculty.
+ *  - Provost: college locked to their own; faculty and
+ *    department vary, validated against their college.
+ *
+ * Every unit is re-validated here against the requester's
+ * own scope regardless of what the client sends. When more
+ * than one unit is picked, the requisition is effectively a
+ * consolidated requisition (isConsolidated: true) and every
+ * item must be tagged with which unit it belongs to — that
+ * item-level check happens in submitRequisition().
+ */
 function getRequestingOrganization({
   requesterUser,
   payload,
@@ -102,52 +169,137 @@ function getRequestingOrganization({
     requesterUser.role ===
     ROLES.PROCUREMENT;
 
-  if (isProcurement) {
+  const isDean =
+    requesterUser.role ===
+    ROLES.DEAN;
+
+  const isProvost =
+    requesterUser.role ===
+    ROLES.PROVOST;
+
+  const canPickOrganization =
+    isProcurement ||
+    isDean ||
+    isProvost;
+
+  if (!canPickOrganization) {
     return {
       collegeId:
-        payload.collegeId ||
-        "N/A",
+        requesterUser.collegeId,
 
       facultyId:
-        payload.facultyId ||
-        "N/A",
+        requesterUser.facultyId,
 
       department:
-        payload.department ||
-        "N/A",
+        requesterUser.department,
+
+      isConsolidated: false,
+
+      requestingUnits: [],
     };
   }
 
-  /*
-   * DEAN can initiate a requisition on behalf of any
-   * department within their own faculty.
-   *
-   * College and faculty are always locked to the Dean's
-   * own — never taken from the payload — so a Dean can
-   * never route a requisition through a different
-   * faculty's approval chain. Only department is chosen
-   * from the payload, and it's validated against the
-   * Dean's own faculty below.
-   */
-  if (requesterUser.role === ROLES.DEAN) {
+  const rawUnits = Array.isArray(
+    payload.requestingUnits
+  )
+    ? payload.requestingUnits
+    : [];
+
+  const units = rawUnits.map((unit) => {
+    if (isProcurement) {
+      const faculty = getFaculty(
+        unit.collegeId,
+        unit.facultyId
+      );
+
+      if (
+        !faculty?.departments?.includes(
+          unit.department
+        )
+      ) {
+        throw new Error(
+          "One of the selected requesting units is invalid."
+        );
+      }
+
+      return {
+        collegeId: unit.collegeId,
+        facultyId: unit.facultyId,
+        department: unit.department,
+      };
+    }
+
+    if (isDean) {
+      const faculty = getFaculty(
+        requesterUser.collegeId,
+        requesterUser.facultyId
+      );
+
+      if (
+        !faculty?.departments?.includes(
+          unit.department
+        )
+      ) {
+        throw new Error(
+          "Selected department is not part of your faculty."
+        );
+      }
+
+      return {
+        collegeId:
+          requesterUser.collegeId,
+
+        facultyId:
+          requesterUser.facultyId,
+
+        department: unit.department,
+      };
+    }
+
+    // isProvost
     const faculty = getFaculty(
       requesterUser.collegeId,
-      requesterUser.facultyId
+      unit.facultyId
     );
 
-    const requestedDepartment =
-      payload.department ||
-      requesterUser.department;
-
-    const isValidDepartment =
-      faculty?.departments?.includes(
-        requestedDepartment
-      );
-
-    if (!isValidDepartment) {
+    if (!faculty) {
       throw new Error(
-        "Selected department is not part of your faculty."
+        "Selected faculty is not part of your college."
       );
+    }
+
+    if (
+      !faculty.departments?.includes(
+        unit.department
+      )
+    ) {
+      throw new Error(
+        "Selected department is not part of the selected faculty."
+      );
+    }
+
+    return {
+      collegeId:
+        requesterUser.collegeId,
+
+      facultyId: unit.facultyId,
+      department: unit.department,
+    };
+  });
+
+  /*
+   * Nothing selected yet — still drafting. Fall back to a
+   * sensible default so the draft is still valid to save.
+   */
+  if (units.length === 0) {
+    if (isProcurement) {
+      return {
+        collegeId: "N/A",
+        facultyId: "N/A",
+        department: "N/A",
+        isConsolidated: false,
+        requestingUnits: [],
+      };
     }
 
     return {
@@ -158,73 +310,37 @@ function getRequestingOrganization({
         requesterUser.facultyId,
 
       department:
-        requestedDepartment,
+        requesterUser.department,
+
+      isConsolidated: false,
+
+      requestingUnits: [],
     };
   }
 
-  /*
-   * PROVOST can initiate a requisition on behalf of any
-   * faculty/department within their own college.
-   *
-   * College is always locked to the Provost's own — never
-   * taken from the payload. Faculty and department are
-   * chosen from the payload and validated against the
-   * Provost's own college below.
-   */
-  if (requesterUser.role === ROLES.PROVOST) {
-    const requestedFacultyId =
-      payload.facultyId ||
-      requesterUser.facultyId;
-
-    const faculty = getFaculty(
-      requesterUser.collegeId,
-      requestedFacultyId
-    );
-
-    if (!faculty) {
-      throw new Error(
-        "Selected faculty is not part of your college."
-      );
-    }
-
-    const requestedDepartment =
-      payload.department ||
-      requesterUser.department;
-
-    const isValidDepartment =
-      faculty.departments?.includes(
-        requestedDepartment
-      );
-
-    if (!isValidDepartment) {
-      throw new Error(
-        "Selected department is not part of the selected faculty."
-      );
-    }
-
+  if (units.length === 1) {
     return {
-      collegeId:
-        requesterUser.collegeId,
-
-      facultyId:
-        requestedFacultyId,
-
-      department:
-        requestedDepartment,
+      collegeId: units[0].collegeId,
+      facultyId: units[0].facultyId,
+      department: units[0].department,
+      isConsolidated: false,
+      requestingUnits: units,
     };
   }
+
+  const {
+    commonCollegeId,
+    commonFacultyId,
+  } = deriveCommonCollegeFaculty(units);
 
   return {
-    collegeId:
-      requesterUser.collegeId,
-
-    facultyId:
-      requesterUser.facultyId,
-
-    department:
-      requesterUser.department,
+    collegeId: commonCollegeId,
+    facultyId: commonFacultyId,
+    department: "N/A",
+    isConsolidated: true,
+    requestingUnits: units,
   };
-}
+  }
 
 /*
  * --------------------------------------------------
@@ -276,6 +392,12 @@ export async function saveDraft({
 
     department:
       organization.department,
+
+    isConsolidated:
+      organization.isConsolidated,
+
+    requestingUnits:
+      organization.requestingUnits,
   };
 
   let requisition;
@@ -331,17 +453,21 @@ export async function saveDraft({
     requisition.estimatedCost =
       data.estimatedCost;
 
-    /*
-     * Only Procurement may update
-     * the requesting organization
-     * from the requisition form.
+/*
+     * Only Procurement/Dean/Provost may update
+     * the requesting organization from the
+     * requisition form.
      *
      * For normal users, preserve the
      * original organizational snapshot.
      */
     if (
       requesterUser.role ===
-      ROLES.PROCUREMENT
+        ROLES.PROCUREMENT ||
+      requesterUser.role ===
+        ROLES.DEAN ||
+      requesterUser.role ===
+        ROLES.PROVOST
     ) {
       requisition.collegeId =
         data.collegeId;
@@ -351,6 +477,12 @@ export async function saveDraft({
 
       requisition.department =
         data.department;
+
+      requisition.isConsolidated =
+        data.isConsolidated;
+
+      requisition.requestingUnits =
+        data.requestingUnits;
     }
 
     if (
@@ -474,33 +606,61 @@ export async function submitRequisition({
 
   /*
    * --------------------------------------------------
-   * PROCUREMENT VALIDATION
+   * REQUESTING ORGANIZATION VALIDATION
    * --------------------------------------------------
    *
-   * Procurement must explicitly identify
-   * the organization whose requirements
-   * are being requested.
+   * Procurement, Dean and Provost must explicitly select
+   * at least one requesting organization before submitting.
+   * When more than one is selected, every item must be
+   * tagged with which one it belongs to — that's what
+   * makes it possible to preserve each item's originating
+   * department through a multi-unit requisition.
    */
 
-  const isProcurement =
+  const canPickOrganization =
     requesterUser.role ===
-    ROLES.PROCUREMENT;
+      ROLES.PROCUREMENT ||
+    requesterUser.role ===
+      ROLES.DEAN ||
+    requesterUser.role ===
+      ROLES.PROVOST;
 
-  if (isProcurement) {
-    if (
-      !requisition.collegeId ||
-      requisition.collegeId ===
-        "N/A" ||
-      !requisition.facultyId ||
-      requisition.facultyId ===
-        "N/A" ||
-      !requisition.department ||
-      requisition.department ===
-        "N/A"
-    ) {
+  if (canPickOrganization) {
+    const units =
+      requisition.requestingUnits ||
+      [];
+
+    if (units.length === 0) {
       throw new Error(
-        "Procurement must select the requesting College, Faculty and Department before submitting."
+        "Please select at least one requesting College, Faculty and Department before submitting."
       );
+    }
+
+    if (units.length > 1) {
+      const validKeys = new Set(
+        units.map(unitKey)
+      );
+
+      const untaggedItem =
+        requisition.items.find(
+          (item) => {
+            const key = [
+              item.requestingCollegeId,
+              item.requestingFacultyId,
+              item.requestingDepartment,
+            ].join("|");
+
+            return !validKeys.has(
+              key
+            );
+          }
+        );
+
+      if (untaggedItem) {
+        throw new Error(
+          "Every item must be tagged with one of the selected requesting departments."
+        );
+      }
     }
   }
 
