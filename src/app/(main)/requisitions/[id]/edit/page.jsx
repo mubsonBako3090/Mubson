@@ -107,17 +107,11 @@ export default function EditRequisitionPage() {
           data.items,
 
         /*
-         * Important for Procurement
+         * Important for Procurement/Dean/Provost
          * when editing/resuming.
          */
-        collegeId:
-          data.collegeId,
-
-        facultyId:
-          data.facultyId,
-
-        department:
-          data.department,
+        requestingUnits:
+          data.requestingUnits,
       };
 
       const {
@@ -174,21 +168,40 @@ export default function EditRequisitionPage() {
 
   async function handleSubmit() {
     if (
-      user?.role ===
-      ROLES.PROCUREMENT
+      user?.role === ROLES.PROCUREMENT ||
+      user?.role === ROLES.DEAN ||
+      user?.role === ROLES.PROVOST
     ) {
       if (
-        !data.collegeId ||
-        !data.facultyId ||
-        !data.department
+        !data.requestingUnits ||
+        data.requestingUnits.length === 0
       ) {
         toast.error(
-          "Please select the requesting College, Faculty and Department."
+          "Please select at least one requesting College, Faculty and Department."
         );
 
         setStep(0);
 
         return;
+      }
+
+      if (data.requestingUnits.length > 1) {
+        const untaggedItem = (
+          data.items || []
+        ).find(
+          (item) =>
+            !item.requestingDepartment
+        );
+
+        if (untaggedItem) {
+          toast.error(
+            "Please tag every item with which department it's for."
+          );
+
+          setStep(1);
+
+          return;
+        }
       }
     }
 
@@ -293,25 +306,28 @@ export default function EditRequisitionPage() {
         }
       >
         {step === 0 && (
-  <RequisitionWizardStep1
-    data={data}
-    onChange={update}
-    requesterRole={
-      user.role
-    }
-    requesterCollegeId={
-      user.collegeId
-    }
-    requesterFacultyId={
-      user.facultyId
-    }
-  />
-)}
+          <RequisitionWizardStep1
+            data={data}
+            onChange={update}
+            requesterRole={
+              requesterRole
+            }
+            requesterCollegeId={
+              user.collegeId
+            }
+            requesterFacultyId={
+              user.facultyId
+            }
+          />
+        )}
 
         {step === 1 && (
           <RequisitionWizardStep2
             items={
               data.items || []
+            }
+            requestingUnits={
+              data.requestingUnits
             }
             onChange={update}
           />
@@ -391,4 +407,4 @@ export default function EditRequisitionPage() {
       </div>
     </div>
   );
-      }
+}
