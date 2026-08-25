@@ -3,19 +3,69 @@
 import { formatNaira } from "@/utils/formatNaira";
 import styles from "./RequisitionItemsTable.module.css";
 
-// `items` is [{ name, quantity, unitCost }]. Fully controlled by parent.
-export default function RequisitionItemsTable({ items, onChange, readOnly = false }) {
+function unitKey(unit) {
+  return [unit.collegeId, unit.facultyId, unit.department].join("|");
+}
+
+function itemUnitKey(item) {
+  return [
+    item.requestingCollegeId || "",
+    item.requestingFacultyId || "",
+    item.requestingDepartment || "",
+  ].join("|");
+}
+
+// `items` is [{ name, quantity, unitCost, requestingCollegeId?, requestingFacultyId?, requestingDepartment? }].
+// `requestingUnits` is the list picked in Step 1 — when there's more than one,
+// each item must be tagged with which one it belongs to.
+export default function RequisitionItemsTable({ items, requestingUnits, onChange, readOnly = false }) {
+  const units = requestingUnits || [];
+  const showDepartmentColumn = units.length > 1;
+
   function updateItem(index, field, value) {
     const next = items.map((item, i) => (i === index ? { ...item, [field]: value } : item));
     onChange(next);
   }
 
+  function updateItemUnit(index, key) {
+    const unit = units.find((u) => unitKey(u) === key);
+
+    const next = items.map((item, i) =>
+      i === index
+        ? {
+            ...item,
+            requestingCollegeId: unit?.collegeId || "",
+            requestingFacultyId: unit?.facultyId || "",
+            requestingDepartment: unit?.department || "",
+          }
+        : item
+    );
+
+    onChange(next);
+  }
+
   function addItem() {
-    onChange([...items, { name: "", quantity: 1, unitCost: 0 }]);
+    const soloUnit = units.length === 1 ? units[0] : null;
+
+    onChange([
+      ...items,
+      {
+        name: "",
+        quantity: 1,
+        unitCost: 0,
+        requestingCollegeId: soloUnit?.collegeId || "",
+        requestingFacultyId: soloUnit?.facultyId || "",
+        requestingDepartment: soloUnit?.department || "",
+      },
+    ]);
   }
 
   function removeItem(index) {
     onChange(items.filter((_, i) => i !== index));
+  }
+
+  function labelForUnit(unit) {
+    return unit.department;
   }
 
   const total = items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
@@ -26,6 +76,7 @@ export default function RequisitionItemsTable({ items, onChange, readOnly = fals
         <thead>
           <tr>
             <th>Item</th>
+            {showDepartmentColumn && <th>Department</th>}
             <th>Qty</th>
             <th>Unit Cost (₦)</th>
             <th>Total</th>
@@ -47,6 +98,26 @@ export default function RequisitionItemsTable({ items, onChange, readOnly = fals
                   />
                 )}
               </td>
+              {showDepartmentColumn && (
+                <td>
+                  {readOnly ? (
+                    item.requestingDepartment || "-"
+                  ) : (
+                    <select
+                      className={styles.cellInput}
+                      value={itemUnitKey(item)}
+                      onChange={(e) => updateItemUnit(i, e.target.value)}
+                    >
+                      <option value="">Select department</option>
+                      {units.map((unit) => (
+                        <option key={unitKey(unit)} value={unitKey(unit)}>
+                          {labelForUnit(unit)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </td>
+              )}
               <td>
                 {readOnly ? (
                   item.quantity
@@ -98,4 +169,4 @@ export default function RequisitionItemsTable({ items, onChange, readOnly = fals
       </div>
     </div>
   );
-}
+                  }
