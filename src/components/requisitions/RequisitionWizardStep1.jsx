@@ -34,16 +34,9 @@ export default function RequisitionWizardStep1({
 
       {showRequestingOrganization && (
         <RequestingOrganizationSelect
-          value={{
-            collegeId:
-              data.collegeId || "",
-
-            facultyId:
-              data.facultyId || "",
-
-            department:
-              data.department || "",
-          }}
+          value={
+            data.requestingUnits || []
+          }
           onChange={onChange}
           requesterRole={requesterRole}
           homeCollegeId={requesterCollegeId}
@@ -150,4 +143,4 @@ export default function RequisitionWizardStep1({
       </div>
     </div>
   );
-}
+              }
