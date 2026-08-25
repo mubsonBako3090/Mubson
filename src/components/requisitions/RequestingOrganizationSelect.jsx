@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   COLLEGES,
   getCollegeById,
@@ -12,15 +12,25 @@ import { ROLES } from "@/constants/roles";
 import SelectField from "@/components/forms/SelectField";
 import styles from "./RequestingOrganizationSelect.module.css";
 
+function unitKey(unit) {
+  return [
+    unit.collegeId,
+    unit.facultyId,
+    unit.department,
+  ].join("|");
+}
+
 /*
- * scope describes how much of the organization the current
- * user is allowed to pick, based on their role:
+ * value: an array of { collegeId, facultyId, department },
+ * one entry per requesting unit picked so far.
  *
- *  - Procurement: fully open, university-wide.
- *  - Dean: college + faculty locked to their own; only
- *    department is a live choice, limited to that faculty.
- *  - Provost: college locked to their own; faculty and
- *    department are live choices, limited to that college.
+ * scope by role:
+ *  - Procurement: fully open, university-wide, can add
+ *    units from any college/faculty/department.
+ *  - Provost: college locked to their own; can add multiple
+ *    faculty/department combinations within that college.
+ *  - Dean: college + faculty locked to their own; can add
+ *    multiple departments within that faculty.
  */
 export default function RequestingOrganizationSelect({
   value,
@@ -29,6 +39,8 @@ export default function RequestingOrganizationSelect({
   homeCollegeId,
   homeFacultyId,
 }) {
+  const units = value || [];
+
   const lockCollege =
     requesterRole === ROLES.DEAN ||
     requesterRole === ROLES.PROVOST;
@@ -36,112 +48,139 @@ export default function RequestingOrganizationSelect({
   const lockFaculty =
     requesterRole === ROLES.DEAN;
 
-  const {
-    collegeId = "",
-    facultyId = "",
-    department = "",
-  } = value || {};
+  /*
+   * Staging selections — the picker used to build up the
+   * next unit before it's added to the list. Kept local;
+   * only committed units live in `value`.
+   */
+  const [stagingCollegeId, setStagingCollegeId] =
+    useState(lockCollege ? homeCollegeId || "" : "");
 
-  const college = collegeId
-    ? getCollegeById(collegeId)
+  const [stagingFacultyId, setStagingFacultyId] =
+    useState(lockFaculty ? homeFacultyId || "" : "");
+
+  const [stagingDepartment, setStagingDepartment] =
+    useState("");
+
+  /*
+   * Seed / re-lock staging college & faculty once the
+   * requester's own profile values are known.
+   */
+  useEffect(() => {
+    if (lockCollege && homeCollegeId) {
+      setStagingCollegeId(homeCollegeId);
+    }
+  }, [lockCollege, homeCollegeId]);
+
+  useEffect(() => {
+    if (lockFaculty && homeFacultyId) {
+      setStagingFacultyId(homeFacultyId);
+    }
+  }, [lockFaculty, homeFacultyId]);
+
+  const stagingCollege = stagingCollegeId
+    ? getCollegeById(stagingCollegeId)
     : null;
 
-  const faculty =
-    college && facultyId
-      ? getFaculty(collegeId, facultyId)
+  const stagingFacultyObj =
+    stagingCollege && stagingFacultyId
+      ? getFaculty(
+          stagingCollegeId,
+          stagingFacultyId
+        )
       : null;
 
-  /*
-   * If the selected college changes, the old
-   * faculty and department are no longer valid.
-   */
-  useEffect(() => {
-    if (
-      facultyId &&
-      !faculty
-    ) {
-      onChange({
-        facultyId: "",
-        department: "",
-      });
-    }
-  }, [
-    collegeId,
-    facultyId,
-    faculty,
-    onChange,
-  ]);
+  function handleStagingCollegeChange(newCollegeId) {
+    setStagingCollegeId(newCollegeId);
+    setStagingFacultyId("");
+    setStagingDepartment("");
+  }
 
-  /*
-   * Dean/Provost: seed the locked field(s) with their own
-   * college (and faculty, for a Dean) as soon as we know
-   * them, so the payload is never submitted empty.
-   */
-  useEffect(() => {
-    if (
-      lockCollege &&
-      homeCollegeId &&
-      collegeId !== homeCollegeId
-    ) {
-      onChange({
-        collegeId: homeCollegeId,
-        facultyId: lockFaculty
-          ? homeFacultyId || ""
-          : "",
-        department: "",
-      });
-    }
-  }, [
-    lockCollege,
-    lockFaculty,
-    homeCollegeId,
-    homeFacultyId,
-    collegeId,
-    onChange,
-  ]);
+  function handleStagingFacultyChange(newFacultyId) {
+    setStagingFacultyId(newFacultyId);
+    setStagingDepartment("");
+  }
 
-  useEffect(() => {
+  function handleAdd() {
     if (
-      lockFaculty &&
-      homeFacultyId &&
-      facultyId !== homeFacultyId
+      !stagingCollegeId ||
+      !stagingFacultyId ||
+      !stagingDepartment
     ) {
-      onChange({
-        facultyId: homeFacultyId,
-        department: "",
-      });
+      return;
     }
-  }, [
-    lockFaculty,
-    homeFacultyId,
-    facultyId,
-    onChange,
-  ]);
 
-  function handleCollegeChange(
-    newCollegeId
-  ) {
+    const newUnit = {
+      collegeId: stagingCollegeId,
+      facultyId: stagingFacultyId,
+      department: stagingDepartment,
+    };
+
+    const alreadyAdded = units.some(
+      (u) => unitKey(u) === unitKey(newUnit)
+    );
+
+    if (alreadyAdded) {
+      return;
+    }
+
     onChange({
-      collegeId: newCollegeId,
-      facultyId: "",
-      department: "",
+      requestingUnits: [
+        ...units,
+        newUnit,
+      ],
+    });
+
+    /*
+     * Keep college/faculty selected (locked ones stay locked
+     * anyway) so adding several departments in a row is quick;
+     * only department resets.
+     */
+    setStagingDepartment("");
+  }
+
+  function handleRemove(index) {
+    onChange({
+      requestingUnits: units.filter(
+        (_, i) => i !== index
+      ),
     });
   }
 
-  function handleFacultyChange(
-    newFacultyId
-  ) {
-    onChange({
-      facultyId: newFacultyId,
-      department: "",
-    });
+  function labelFor(unit) {
+    if (requesterRole === ROLES.DEAN) {
+      return unit.department;
+    }
+
+    if (requesterRole === ROLES.PROVOST) {
+      const faculty = getFaculty(
+        unit.collegeId,
+        unit.facultyId
+      );
+
+      return `${faculty?.name || unit.facultyId} — ${unit.department}`;
+    }
+
+    const college = getCollegeById(
+      unit.collegeId
+    );
+
+    const faculty = getFaculty(
+      unit.collegeId,
+      unit.facultyId
+    );
+
+    return `${college?.name || unit.collegeId} — ${
+      faculty?.name || unit.facultyId
+    } — ${unit.department}`;
   }
 
-  const description = lockFaculty
-    ? "Select which department within your faculty this requisition is for."
-    : lockCollege
-    ? "Select which faculty and department within your college this requisition is for."
-    : "Select the College, Faculty, and Department whose needs are being requested. This is especially important when Procurement is initiating the requisition on behalf of a department.";
+  const description =
+    requesterRole === ROLES.DEAN
+      ? "Add every department within your faculty this requisition covers."
+      : requesterRole === ROLES.PROVOST
+      ? "Add every faculty/department within your college this requisition covers."
+      : "Add every College/Faculty/Department whose needs are being requested. This is especially important when Procurement is initiating the requisition on behalf of other units.";
 
   return (
     <div className={styles.wrapper}>
@@ -153,12 +192,36 @@ export default function RequestingOrganizationSelect({
         {description}
       </p>
 
+      {units.length > 0 && (
+        <ul className={styles.unitList}>
+          {units.map((unit, index) => (
+            <li
+              key={unitKey(unit)}
+              className={styles.unitChip}
+            >
+              <span>{labelFor(unit)}</span>
+
+              <button
+                type="button"
+                className={styles.unitRemoveBtn}
+                onClick={() =>
+                  handleRemove(index)
+                }
+                aria-label="Remove"
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
       <SelectField
         id="requestingCollegeId"
         label="Requesting College"
-        value={collegeId}
+        value={stagingCollegeId}
         onChange={(e) =>
-          handleCollegeChange(
+          handleStagingCollegeChange(
             e.target.value
           )
         }
@@ -182,20 +245,22 @@ export default function RequestingOrganizationSelect({
       <SelectField
         id="requestingFacultyId"
         label="Requesting Faculty"
-        value={facultyId}
+        value={stagingFacultyId}
         onChange={(e) =>
-          handleFacultyChange(
+          handleStagingFacultyChange(
             e.target.value
           )
         }
-        disabled={!college || lockFaculty}
+        disabled={
+          !stagingCollege || lockFaculty
+        }
         required
       >
         <option value="">
           Select requesting faculty
         </option>
 
-        {college?.faculties?.map(
+        {stagingCollege?.faculties?.map(
           (item) => (
             <option
               key={item.id}
@@ -210,21 +275,20 @@ export default function RequestingOrganizationSelect({
       <SelectField
         id="requestingDepartment"
         label="Requesting Department"
-        value={department}
+        value={stagingDepartment}
         onChange={(e) =>
-          onChange({
-            department:
-              e.target.value,
-          })
+          setStagingDepartment(
+            e.target.value
+          )
         }
-        disabled={!faculty}
+        disabled={!stagingFacultyObj}
         required
       >
         <option value="">
           Select requesting department
         </option>
 
-        {faculty?.departments?.map(
+        {stagingFacultyObj?.departments?.map(
           (item) => (
             <option
               key={item}
@@ -235,6 +299,19 @@ export default function RequestingOrganizationSelect({
           )
         )}
       </SelectField>
+
+      <button
+        type="button"
+        className={styles.addUnitBtn}
+        onClick={handleAdd}
+        disabled={
+          !stagingCollegeId ||
+          !stagingFacultyId ||
+          !stagingDepartment
+        }
+      >
+        + Add department
+      </button>
     </div>
   );
       }
