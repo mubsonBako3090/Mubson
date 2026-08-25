@@ -43,13 +43,11 @@ export default function NewRequisitionPage() {
       attachments: [],
 
       /*
-       * Used by Procurement to identify
-       * the department whose needs are
-       * being requested.
+       * Used by Procurement/Dean/Provost to identify
+       * the department(s) whose needs are being
+       * requested.
        */
-      collegeId: "",
-      facultyId: "",
-      department: "",
+      requestingUnits: [],
     });
 
   const [saving, setSaving] =
@@ -106,16 +104,10 @@ export default function NewRequisitionPage() {
 
         /*
          * These fields are only meaningful
-         * for Procurement.
+         * for Procurement/Dean/Provost.
          */
-        collegeId:
-          data.collegeId,
-
-        facultyId:
-          data.facultyId,
-
-        department:
-          data.department,
+        requestingUnits:
+          data.requestingUnits,
       };
 
       if (requisitionId) {
@@ -189,46 +181,47 @@ export default function NewRequisitionPage() {
 
   async function handleSubmit() {
     /*
-     * Procurement must select the
-     * requesting organization before
-     * submission.
+     * Procurement/Dean/Provost must select at least one
+     * requesting organization before submission.
      */
     if (
-      user?.role ===
-      ROLES.PROCUREMENT
+      user?.role === ROLES.PROCUREMENT ||
+      user?.role === ROLES.DEAN ||
+      user?.role === ROLES.PROVOST
     ) {
       if (
-        !data.collegeId ||
-        !data.facultyId ||
-        !data.department
+        !data.requestingUnits ||
+        data.requestingUnits.length === 0
       ) {
         toast.error(
-          "Please select the requesting College, Faculty and Department."
+          "Please select at least one requesting College, Faculty and Department."
         );
 
         setStep(0);
 
         return;
+      }
+
+      if (data.requestingUnits.length > 1) {
+        const untaggedItem = (
+          data.items || []
+        ).find(
+          (item) =>
+            !item.requestingDepartment
+        );
+
+        if (untaggedItem) {
+          toast.error(
+            "Please tag every item with which department it's for."
+          );
+
+          setStep(1);
+
+          return;
+        }
       }
     }
-if (
-      user?.role ===
-      ROLES.PROVOST
-    ) {
-      if (
-        !data.collegeId ||
-        !data.facultyId ||
-        !data.department
-      ) {
-        toast.error(
-          "Please select the requesting College, Faculty and Department."
-        );
 
-        setStep(0);
-
-        return;
-      }
-}
     const saved =
       await saveDraft({
         silent: true,
@@ -310,25 +303,26 @@ if (
           styles.stepBody
         }
       >
-       {step === 0 && (
-  <RequisitionWizardStep1
-    data={data}
-    onChange={update}
-    requesterRole={
-      user.role
-    }
-    requesterCollegeId={
-      user.collegeId
-    }
-    requesterFacultyId={
-      user.facultyId
-    }
-  />
-)}
+        {step === 0 && (
+          <RequisitionWizardStep1
+            data={data}
+            onChange={update}
+            requesterRole={
+              user.role
+            }
+            requesterCollegeId={
+              user.collegeId
+            }
+            requesterFacultyId={
+              user.facultyId
+            }
+          />
+        )}
 
         {step === 1 && (
           <RequisitionWizardStep2
             items={data.items}
+            requestingUnits={data.requestingUnits}
             onChange={update}
           />
         )}
@@ -409,4 +403,4 @@ if (
       </div>
     </div>
   );
-    }
+}
