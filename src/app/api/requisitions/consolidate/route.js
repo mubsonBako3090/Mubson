@@ -253,7 +253,44 @@ export async function POST(request) {
                 "A Dean can only consolidate requisitions from their own faculty.",
             },
             { status: 403 }
-< truncated lines 256-289 >
+          );
+        }
+      }
+
+      if (auth.role === ROLES.PROVOST) {
+        if (!auth.collegeId) {
+          return NextResponse.json(
+            {
+              message:
+                "Provost role is missing required college information.",
+            },
+            { status: 403 }
+          );
+        }
+        if (String(requisition.collegeId) !== String(auth.collegeId)) {
+          return NextResponse.json(
+            {
+              message:
+                "A Provost can only consolidate requisitions from their own college.",
+            },
+            { status: 403 }
+          );
+        }
+      }
+      // VC, PROCUREMENT, ADMIN have university‑wide access – no additional checks.
+    }
+
+    /*
+     * --------------------------------------------------
+     * BUILD DEPARTMENT-SPECIFIC ITEMS
+     * --------------------------------------------------
+     */
+    const consolidatedItems = [];
+    for (const requisition of sourceRequisitions) {
+      for (const item of requisition.items || []) {
+        consolidatedItems.push({
+          name: item.name,
+
       for (const item of requisition.items || []) {
         consolidatedItems.push({
           name: item.name,
