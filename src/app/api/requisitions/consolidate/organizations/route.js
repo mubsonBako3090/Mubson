@@ -75,18 +75,49 @@ export async function GET() {
    * ELIGIBLE SOURCE REQUISITIONS
    * --------------------------------------------------
    *
-   * We allow requisitions that have entered the
-   * workflow but have not already been consolidated.
+   * Drafts and rejected requisitions are always excluded.
+   * Beyond that, eligibility depends on WHEN each role is
+   * meant to consolidate:
    *
-   * Drafts and rejected requisitions are excluded.
+   *  - Dean/Provost/VC: consolidating IS their approval
+   *    action, so they may only pick requisitions that are
+   *    actually sitting at their own step right now. For
+   *    VC this also means the consolidated result is
+   *    immediately finalized — VC is the last approval
+   *    step, so there's nothing left to route it to.
+   *  - Procurement/Admin: consolidation happens AFTER full
+   *    approval, as a post-approval grouping step, so only
+   *    already-VC-approved requisitions are eligible.
    */
-  const baseQuery = {
-    status: {
-      $in: [
+  const isPreApprovalConsolidator =
+    auth.role === ROLES.DEAN ||
+    auth.role === ROLES.PROVOST ||
+    auth.role === ROLES.VC;
+
+  const isPostApprovalConsolidator =
+    auth.role === ROLES.PROCUREMENT ||
+    auth.role === ROLES.ADMIN;
+
+  const statusFilter = isPreApprovalConsolidator
+    ? [
+        REQUISITION_STATUS.PENDING,
+        REQUISITION_STATUS.RETURNED,
+      ]
+    : isPostApprovalConsolidator
+    ? [REQUISITION_STATUS.APPROVED]
+    : [
         REQUISITION_STATUS.PENDING,
         REQUISITION_STATUS.RETURNED,
         REQUISITION_STATUS.APPROVED,
-      ],
+      ];
+
+  const baseQuery = {
+    status: {
+      $in: statusFilter,
+    },
+
+    awaitingRequesterAction: {
+      $ne: true,
     },
 
     isConsolidated: {
@@ -154,18 +185,40 @@ export async function GET() {
    */
 
   const requisitions =
-    await Requisition.find(query)
-      .sort({
-        collegeId: 1,
-        facultyId: 1,
-        department: 1,
-        createdAt: 1,
-      })
-      .populate(
-        "requester",
-        "fullName email role"
-      )
-      .lean();
+    (
+      await Requisition.find(query)
+        .sort({
+          collegeId: 1,
+          facultyId: 1,
+          department: 1,
+          createdAt: 1,
+        })
+        .populate(
+          "requester",
+          "fullName email role"
+        )
+        .lean()
+    ).filter((requisition) => {
+      /*
+       * Dean/Provost: being in their scope isn't enough —
+       * it must actually be THEIR turn to act on it right
+       * now (not still with HOD, not already past them).
+       */
+      if (!isPreApprovalConsolidator) {
+        return true;
+      }
+
+      const step =
+        requisition.approvalChain?.[
+          requisition.currentStepIndex
+        ];
+
+      return (
+        step &&
+        String(step.approver) ===
+          String(auth.sub)
+      );
+    });
 
   /*
    * --------------------------------------------------
