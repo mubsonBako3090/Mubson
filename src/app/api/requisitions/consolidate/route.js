@@ -116,6 +116,7 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+
     if (!ALLOWED_URGENCIES.includes(urgency.toLowerCase())) {
       return NextResponse.json(
         { message: `Urgency must be one of: ${ALLOWED_URGENCIES.join(", ")}.` },
@@ -202,8 +203,10 @@ export async function POST(request) {
     const sourceCategories = [
       ...new Set(sourceRequisitions.map((r) => r.category)),
     ];
+
     // Filter out undefined/null categories, though they shouldn't happen.
     const validSourceCategories = sourceCategories.filter((c) => c != null);
+
     if (validSourceCategories.length > 1) {
       return NextResponse.json(
         {
@@ -213,6 +216,7 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+
     const sourceCategory = validSourceCategories[0]; // all same
 
     // Ensure the provided category matches the source category.
@@ -243,6 +247,7 @@ export async function POST(request) {
             { status: 403 }
           );
         }
+
         if (
           String(requisition.collegeId) !== String(auth.collegeId) ||
           String(requisition.facultyId) !== String(auth.facultyId)
@@ -267,6 +272,7 @@ export async function POST(request) {
             { status: 403 }
           );
         }
+
         if (String(requisition.collegeId) !== String(auth.collegeId)) {
           return NextResponse.json(
             {
@@ -277,7 +283,8 @@ export async function POST(request) {
           );
         }
       }
-      // VC, PROCUREMENT, ADMIN have university‑wide access – no additional checks.
+
+      // VC, PROCUREMENT, ADMIN have university-wide access – no additional checks.
     }
 
     /*
@@ -286,11 +293,8 @@ export async function POST(request) {
      * --------------------------------------------------
      */
     const consolidatedItems = [];
-    for (const requisition of sourceRequisitions) {
-      for (const item of requisition.items || []) {
-        consolidatedItems.push({
-          name: item.name,
 
+    for (const requisition of sourceRequisitions) {
       for (const item of requisition.items || []) {
         consolidatedItems.push({
           name: item.name,
@@ -301,7 +305,7 @@ export async function POST(request) {
           unitCost: Number(item.unitCost || 0),
           totalCost: Number(
             item.totalCost ??
-              (Number(item.quantity || 0) * Number(item.unitCost || 0))
+              Number(item.quantity || 0) * Number(item.unitCost || 0)
           ),
         });
       }
@@ -330,12 +334,14 @@ export async function POST(request) {
      * --------------------------------------------------
      */
     const unitMap = new Map();
+
     for (const requisition of sourceRequisitions) {
       const key = [
         requisition.collegeId,
         requisition.facultyId,
         requisition.department,
       ].join("|");
+
       if (!unitMap.has(key)) {
         unitMap.set(key, {
           collegeId: requisition.collegeId,
@@ -344,6 +350,7 @@ export async function POST(request) {
         });
       }
     }
+
     const requestingUnits = [...unitMap.values()];
 
     // Derive a shared collegeId/facultyId when every source unit agrees,
@@ -355,11 +362,14 @@ export async function POST(request) {
     const distinctColleges = [
       ...new Set(requestingUnits.map((u) => u.collegeId)),
     ];
+
     const distinctFaculties = [
       ...new Set(requestingUnits.map((u) => u.facultyId)),
     ];
+
     const commonCollegeId =
       distinctColleges.length === 1 ? distinctColleges[0] : "N/A";
+
     const commonFacultyId =
       distinctColleges.length === 1 && distinctFaculties.length === 1
         ? distinctFaculties[0]
@@ -504,12 +514,13 @@ export async function POST(request) {
     if (updateResult.modifiedCount !== sourceRequisitions.length) {
       // Delete the newly created consolidated requisition.
       await Requisition.deleteOne({ _id: consolidated._id });
+
       return NextResponse.json(
         {
           message:
             "One or more requisitions were consolidated by another request. Please try again.",
         },
-        { status: 409 } // Conflict
+        { status: 409 }
       );
     }
 
@@ -539,9 +550,13 @@ export async function POST(request) {
     );
   } catch (error) {
     console.error("Consolidated requisition error:", error);
+
     return NextResponse.json(
-      { message: error.message || "Failed to create consolidated requisition." },
+      {
+        message:
+          error.message || "Failed to create consolidated requisition.",
+      },
       { status: 500 }
     );
   }
-      }
+            }
