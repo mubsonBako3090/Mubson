@@ -25,6 +25,7 @@ export async function GET() {
   const requisitions = await Requisition.find({
     status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED] },
     awaitingRequesterAction: { $ne: true },
+    consolidatedInto: { $exists: false },
     "approvalChain.approver": auth.sub,
   })
     .populate("requester", "fullName email department")
