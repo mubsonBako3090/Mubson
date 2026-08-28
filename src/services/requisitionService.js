@@ -60,7 +60,7 @@ function sumEstimatedCost(
  * --------------------------------------------------
  */
 
-async function generateRequisitionNumber() {
+export async function generateRequisitionNumber() {
   const year =
     new Date().getFullYear();
 
