@@ -10,6 +10,7 @@ import SelectField from "@/components/forms/SelectField";
 import inputStyles from "@/components/forms/InputField.module.css";
 import { getCollegeById, getFaculty } from "@/constants/colleges";
 import { REQUISITION_CATEGORIES, URGENCY_LEVELS } from "@/constants/requisitionOptions";
+import { ROLES } from "@/constants/roles";
 import { formatNaira } from "@/utils/formatNaira";
 import styles from "./page.module.css";
 
@@ -32,16 +33,35 @@ export default function ConsolidateRequisitionPage() {
   const [organizations, setOrganizations] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [submitting, setSubmitting] = useState(false);
+  const [userRole, setUserRole] = useState(null);
 
   const [category, setCategory] = useState(REQUISITION_CATEGORIES[0]);
   const [urgency, setUrgency] = useState("normal");
   const [purpose, setPurpose] = useState("");
 
+  /*
+   * Dean/Provost/VC: consolidating IS their approval — the
+   * result is either sent to the next approver (Dean/Provost)
+   * or finalized immediately (VC, the last approval step).
+   *
+   * Procurement/Admin: consolidating only ever pulls from
+   * already-approved requisitions, so the merged result is
+   * created ready for processing straight away.
+   */
+  const isPreApprovalRole =
+    userRole === ROLES.DEAN ||
+    userRole === ROLES.PROVOST ||
+    userRole === ROLES.VC;
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await axios.get("/api/requisitions/consolidate/organizations");
+      const [{ data }, { data: meData }] = await Promise.all([
+        axios.get("/api/requisitions/consolidate/organizations"),
+        axios.get("/api/users/me"),
+      ]);
       setOrganizations(data.organizations || []);
+      setUserRole(meData.user?.role || null);
     } catch (err) {
       toast.error(
         err.response?.data?.message || "Failed to load requisitions available for consolidation."
@@ -127,11 +147,35 @@ export default function ConsolidateRequisitionPage() {
         urgency,
         purpose: purpose.trim(),
       });
-      toast.success("Consolidated requisition created.");
+
+      const created = data.requisition;
+
+      if (created.status === "draft") {
+        /*
+         * Dean/Provost: consolidating doubles as their
+         * approval for the selected requisitions — send the
+         * merged requisition straight to the next approver
+         * rather than leaving it sitting as an unsubmitted
+         * draft.
+         */
+        try {
+          await axios.post(`/api/requisitions/${created._id}/submit`);
+          toast.success("Consolidated requisition approved and sent to the next approver.");
+        } catch (submitErr) {
+          toast.error(
+            submitErr.response?.data?.message ||
+              "Consolidated requisition created, but couldn't be sent automatically — please submit it from the requisition page."
+          );
+        }
+      } else {
+        // VC/Procurement/Admin: already finalized, ready for processing.
+        toast.success("Consolidated requisition created and ready for processing.");
+      }
+
       // Route to the detail (view) page, not /edit — the edit wizard is
       // built for the single-department creation flow and isn't aware of
       // consolidated records (requestingUnits, multi-department items).
-      router.push(`/requisitions/${data.requisition._id}`);
+      router.push(`/requisitions/${created._id}`);
     } catch (err) {
       toast.error(err.response?.data?.message || "Failed to create consolidated requisition.");
     } finally {
@@ -149,9 +193,10 @@ export default function ConsolidateRequisitionPage() {
         <div>
           <h1 className={styles.heading}>Consolidate Requisitions</h1>
           <p className={styles.subheading}>
-            Select submitted requisitions from the units under your authority and merge them into a
-            single consolidated requisition. Each item keeps its originating department for
-            traceability.
+            {isPreApprovalRole
+              ? "Select requisitions currently pending your approval and merge them into one. Consolidating doubles as your approval — the merged requisition is sent straight to the next approver."
+              : "Select already fully-approved requisitions from the units under your authority and merge them into one for processing."}{" "}
+            Each item keeps its originating department for traceability.
           </p>
         </div>
       </div>
@@ -160,8 +205,9 @@ export default function ConsolidateRequisitionPage() {
         <p className={styles.hint}>Loading requisitions available for consolidation…</p>
       ) : !hasAnyRequisitions ? (
         <p className={styles.hint}>
-          No pending or approved requisitions are currently available to consolidate within your
-          scope.
+          {isPreApprovalRole
+            ? "No requisitions are currently pending your approval within your scope."
+            : "No fully-approved requisitions are currently available to consolidate within your scope."}
         </p>
       ) : (
         <div className={styles.layout}>
@@ -300,15 +346,16 @@ export default function ConsolidateRequisitionPage() {
             </div>
 
             <Button type="submit" fullWidth loading={submitting} disabled={selectedIds.size === 0}>
-              Create Consolidated Requisition
+              {isPreApprovalRole ? "Consolidate & Approve" : "Create Consolidated Requisition"}
             </Button>
             <p className={styles.summaryNote}>
-              This creates a draft. You can review it and submit it into the approval workflow
-              afterward.
+              {isPreApprovalRole
+                ? "This immediately approves the selected requisitions (via consolidation) and routes the merged requisition to the next approver."
+                : "The merged requisition will be created ready for Procurement processing."}
             </p>
           </form>
         </div>
       )}
     </div>
   );
-}
+        }
