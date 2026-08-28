@@ -6,6 +6,9 @@ import { connectDB } from "@/lib/db";
 
 import Requisition from "@/models/Requisition";
 import AuditLog from "@/models/AuditLog";
+import User from "@/models/User";
+
+import { generateRequisitionNumber } from "@/services/requisitionService";
 
 import { ROLES } from "@/constants/roles";
 import { REQUISITION_STATUS, URGENCY_LEVELS } from "@/constants/requisitionOptions";
@@ -126,17 +129,33 @@ export async function POST(request) {
      * --------------------------------------------------
      * LOAD SOURCE REQUISITIONS
      * --------------------------------------------------
+     *
+     * Eligibility depends on WHEN each role is meant to
+     * consolidate (see organizations/route.js for the
+     * same reasoning):
+     *
+     *  - Dean/Provost/VC: only requisitions pending/
+     *    returned (consolidating is their approval action).
+     *  - Procurement/Admin: only already-VC-approved
+     *    requisitions (post-approval grouping).
      */
+    const isPreApprovalConsolidator =
+      auth.role === ROLES.DEAN ||
+      auth.role === ROLES.PROVOST ||
+      auth.role === ROLES.VC;
+
+    const isPostApprovalConsolidator =
+      auth.role === ROLES.PROCUREMENT ||
+      auth.role === ROLES.ADMIN;
+
+    const statusFilter = isPreApprovalConsolidator
+      ? [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED]
+      : [REQUISITION_STATUS.APPROVED];
 
     const sourceRequisitions = await Requisition.find({
       _id: { $in: uniqueIds },
-      status: {
-        $in: [
-          REQUISITION_STATUS.PENDING,
-          REQUISITION_STATUS.RETURNED,
-          REQUISITION_STATUS.APPROVED,
-        ],
-      },
+      status: { $in: statusFilter },
+      awaitingRequesterAction: { $ne: true },
       isConsolidated: { $ne: true },
       consolidatedInto: { $exists: false },
     }).lean();
@@ -144,11 +163,35 @@ export async function POST(request) {
     if (sourceRequisitions.length !== uniqueIds.length) {
       return NextResponse.json(
         {
-          message:
-            "One or more selected requisitions are no longer eligible for consolidation.",
+          message: isPreApprovalConsolidator
+            ? "One or more selected requisitions are not currently pending your approval."
+            : "One or more selected requisitions have not yet completed VC approval.",
         },
         { status: 400 }
       );
+    }
+
+    /*
+     * Dean/Provost/VC: being in scope isn't enough — it
+     * must actually be THEIR turn on every selected
+     * requisition right now, since consolidating doubles
+     * as approving.
+     */
+    if (isPreApprovalConsolidator) {
+      const notMyTurn = sourceRequisitions.some((requisition) => {
+        const step = requisition.approvalChain?.[requisition.currentStepIndex];
+        return !step || String(step.approver) !== String(auth.sub);
+      });
+
+      if (notMyTurn) {
+        return NextResponse.json(
+          {
+            message:
+              "One or more selected requisitions are not currently pending your approval.",
+          },
+          { status: 400 }
+        );
+      }
     }
 
     /*
@@ -210,40 +253,7 @@ export async function POST(request) {
                 "A Dean can only consolidate requisitions from their own faculty.",
             },
             { status: 403 }
-          );
-        }
-      }
-
-      if (auth.role === ROLES.PROVOST) {
-        if (!auth.collegeId) {
-          return NextResponse.json(
-            {
-              message:
-                "Provost role is missing required college information.",
-            },
-            { status: 403 }
-          );
-        }
-        if (String(requisition.collegeId) !== String(auth.collegeId)) {
-          return NextResponse.json(
-            {
-              message:
-                "A Provost can only consolidate requisitions from their own college.",
-            },
-            { status: 403 }
-          );
-        }
-      }
-      // VC, PROCUREMENT, ADMIN have university‑wide access – no additional checks.
-    }
-
-    /*
-     * --------------------------------------------------
-     * BUILD DEPARTMENT-SPECIFIC ITEMS
-     * --------------------------------------------------
-     */
-    const consolidatedItems = [];
-    for (const requisition of sourceRequisitions) {
+< truncated lines 256-289 >
       for (const item of requisition.items || []) {
         consolidatedItems.push({
           name: item.name,
@@ -323,7 +333,91 @@ export async function POST(request) {
 
     /*
      * --------------------------------------------------
-     * CREATE CONSOLIDATED REQUISITION (as DRAFT)
+     * DETERMINE OUTCOME
+     * --------------------------------------------------
+     *
+     * Dean/Provost: consolidating IS their approval, so
+     * the merged requisition still needs to go through
+     * whatever's above them — created as a draft, then the
+     * frontend immediately offers "Send to Next Approver"
+     * (the existing submit endpoint), which builds the
+     * approval chain starting at the next role up.
+     *
+     * VC: consolidating IS their approval too, but VC is
+     * the LAST approval step — there's nothing left to
+     * route it to. The merged requisition is finalized on
+     * the spot, exactly like a normal final VC approval.
+     *
+     * Procurement/Admin: every source already cleared VC
+     * approval individually, so re-running the whole chain
+     * would be redundant — the merged requisition is
+     * created already approved and ready for processing,
+     * the same state a normal requisition reaches only
+     * after full approval.
+     *
+     * VC and Procurement/Admin end up in the same finalized
+     * state; only how the Procurement Officer is resolved
+     * differs (VC isn't Procurement, so look up an active
+     * one; Procurement finalizing their own consolidation
+     * become the officer themselves).
+     */
+
+    const isFinalizedOutcome =
+      auth.role === ROLES.VC ||
+      isPostApprovalConsolidator;
+
+    let procurementOfficer = null;
+
+    if (isFinalizedOutcome) {
+      procurementOfficer =
+        auth.role === ROLES.PROCUREMENT
+          ? await User.findById(auth.sub)
+          : await User.findOne({
+              role: ROLES.PROCUREMENT,
+              accountStatus: "active",
+            });
+
+      if (!procurementOfficer) {
+        return NextResponse.json(
+          {
+            message:
+              "No active Procurement Officer is configured.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    const now = new Date();
+
+    const outcomeFields = isFinalizedOutcome
+      ? {
+          status: REQUISITION_STATUS.APPROVED,
+          requisitionNumber: await generateRequisitionNumber(),
+          submittedAt: now,
+          finalApprovalAt: now,
+          decidedAt: now,
+          currentStepIndex: 0,
+          approvalChain: [
+            {
+              role: ROLES.PROCUREMENT,
+              approver: procurementOfficer._id,
+              type: "processing",
+            },
+          ],
+          procurementStatus: "ready",
+          procurementOfficer: procurementOfficer._id,
+          procurementReceivedAt: now,
+        }
+      : {
+          status: REQUISITION_STATUS.DRAFT,
+          currentStepIndex: 0,
+          approvalChain: [],
+        };
+
+    /*
+     * --------------------------------------------------
+     * CREATE CONSOLIDATED REQUISITION
      * --------------------------------------------------
      */
     const consolidated = await Requisition.create({
@@ -342,10 +436,8 @@ export async function POST(request) {
       urgency: urgency.trim().toLowerCase(),
       items: consolidatedItems,
       estimatedCost,
-      status: REQUISITION_STATUS.DRAFT,
       awaitingRequesterAction: false,
-      currentStepIndex: 0,
-      approvalChain: [],
+      ...outcomeFields,
     });
 
     /*
@@ -396,6 +488,7 @@ export async function POST(request) {
       entityId: consolidated._id,
       details: {
         requesterRole: auth.role,
+        outcomeStatus: consolidated.status,
         sourceRequisitions: sourceRequisitions.map((r) => String(r._id)),
         requestingUnits,
         itemCount: consolidatedItems.length,
@@ -414,4 +507,4 @@ export async function POST(request) {
       { status: 500 }
     );
   }
-  }
+      }
