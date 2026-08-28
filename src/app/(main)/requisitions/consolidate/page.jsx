@@ -40,6 +40,16 @@ export default function ConsolidateRequisitionPage() {
   const [purpose, setPurpose] = useState("");
 
   /*
+   * Handling an individual requisition separately (return/reject)
+   * instead of folding it into the consolidation — one panel open
+   * at a time, keyed by requisition id.
+   */
+  const [handlingId, setHandlingId] = useState(null);
+  const [handlingComment, setHandlingComment] = useState("");
+  const [handlingBusy, setHandlingBusy] = useState(null); // "return" | "reject" | null
+  const [handlingRejectConfirm, setHandlingRejectConfirm] = useState(false);
+
+  /*
    * Dean/Provost/VC: consolidating IS their approval — the
    * result is either sent to the next approver (Dean/Provost)
    * or finalized immediately (VC, the last approval step).
@@ -125,6 +135,89 @@ export default function ConsolidateRequisitionPage() {
       }
       return next;
     });
+  }
+
+  // Removes a requisition from the local tree (and selection) once it's
+  // been handled separately — it's no longer eligible for consolidation.
+  function removeFromTree(id) {
+    setOrganizations((prev) =>
+      prev
+        .map((college) => ({
+          ...college,
+          faculties: college.faculties
+            .map((faculty) => ({
+              ...faculty,
+              departments: faculty.departments
+                .map((dept) => ({
+                  ...dept,
+                  requisitions: dept.requisitions.filter((r) => r._id !== id),
+                }))
+                .filter((dept) => dept.requisitions.length > 0),
+            }))
+            .filter((faculty) => faculty.departments.length > 0),
+        }))
+        .filter((college) => college.faculties.length > 0)
+    );
+
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }
+
+  function openHandlePanel(id) {
+    setHandlingId(id);
+    setHandlingComment("");
+    setHandlingRejectConfirm(false);
+    // Can't consolidate and reject/return the same requisition.
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }
+
+  function closeHandlePanel() {
+    setHandlingId(null);
+    setHandlingComment("");
+    setHandlingRejectConfirm(false);
+  }
+
+  async function handleReturnOne(id) {
+    if (!handlingComment.trim()) {
+      toast.error("Add a comment explaining what needs clarification.");
+      return;
+    }
+    setHandlingBusy("return");
+    try {
+      await axios.post(`/api/approvals/${id}/return`, { comment: handlingComment.trim() });
+      toast.success("Requisition returned for clarification.");
+      removeFromTree(id);
+      closeHandlePanel();
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Return failed.");
+    } finally {
+      setHandlingBusy(null);
+    }
+  }
+
+  async function handleRejectOne(id, isFinal) {
+    if (!handlingComment.trim()) {
+      toast.error("A comment is required to reject a requisition.");
+      return;
+    }
+    setHandlingBusy("reject");
+    try {
+      await axios.post(`/api/approvals/${id}/reject`, { comment: handlingComment.trim(), isFinal });
+      toast.success(isFinal ? "Requisition rejected." : "Requisition rejected and returned to requester.");
+      removeFromTree(id);
+      closeHandlePanel();
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Rejection failed.");
+    } finally {
+      setHandlingBusy(null);
+    }
   }
 
   async function handleSubmit(e) {
@@ -265,6 +358,82 @@ export default function ConsolidateRequisitionPage() {
                                     <span className="mono">{formatNaira(req.estimatedCost)}</span>
                                   </span>
                                 </label>
+
+                                {isPreApprovalRole && handlingId !== req._id && (
+                                  <button
+                                    type="button"
+                                    className={styles.handleSeparatelyBtn}
+                                    onClick={() => openHandlePanel(req._id)}
+                                  >
+                                    Handle separately
+                                  </button>
+                                )}
+
+                                {handlingId === req._id && (
+                                  <div className={styles.handlePanel}>
+                                    <p className={styles.handlePanelHint}>
+                                      Return this requisition for clarification, or reject it — it
+                                      won't be included in the consolidation.
+                                    </p>
+
+                                    <textarea
+                                      className={styles.handlePanelTextarea}
+                                      rows={2}
+                                      placeholder="Comment (required)…"
+                                      value={handlingComment}
+                                      onChange={(e) => setHandlingComment(e.target.value)}
+                                    />
+
+                                    {!handlingRejectConfirm ? (
+                                      <div className={styles.handlePanelActions}>
+                                        <Button
+                                          type="button"
+                                          variant="secondary"
+                                          onClick={() => handleReturnOne(req._id)}
+                                          loading={handlingBusy === "return"}
+                                        >
+                                          Return for Clarification
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          variant="danger"
+                                          onClick={() => setHandlingRejectConfirm(true)}
+                                        >
+                                          Reject
+                                        </Button>
+                                        <Button type="button" variant="ghost" onClick={closeHandlePanel}>
+                                          Cancel
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <div className={styles.handlePanelActions}>
+                                        <Button
+                                          type="button"
+                                          variant="secondary"
+                                          onClick={() => handleRejectOne(req._id, false)}
+                                          loading={handlingBusy === "reject"}
+                                        >
+                                          Reject — Allow Resubmission
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          variant="danger"
+                                          onClick={() => handleRejectOne(req._id, true)}
+                                          loading={handlingBusy === "reject"}
+                                        >
+                                          Reject — Final
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          onClick={() => setHandlingRejectConfirm(false)}
+                                        >
+                                          Back
+                                        </Button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                               </li>
                             ))}
                           </ul>
@@ -358,4 +527,4 @@ export default function ConsolidateRequisitionPage() {
       )}
     </div>
   );
-        }
+                                           }
