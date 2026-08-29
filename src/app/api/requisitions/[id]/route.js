@@ -62,6 +62,17 @@ export async function GET(
         "approvalChain.approver",
         "fullName role"
       )
+      .populate(
+        "sourceRequisitions",
+        "requisitionNumber category status collegeId facultyId department estimatedCost requester",
+        null,
+        {
+          populate: {
+            path: "requester",
+            select: "fullName role",
+          },
+        }
+      )
       .lean();
 
   if (!requisition) {
@@ -252,4 +263,4 @@ export async function PATCH(
       }
     );
   }
-        }
+      }
