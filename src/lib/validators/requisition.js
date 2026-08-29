@@ -203,3 +203,17 @@ export const rejectActionSchema =
     isFinal: Joi.boolean()
       .required(),
   });
+
+export const partialResolveSchema =
+  Joi.object({
+    sourceRequisitionId: Joi.string()
+      .required(),
+
+    action: Joi.string()
+      .valid("return", "reject")
+      .required(),
+
+    comment: Joi.string()
+      .min(3)
+      .required(),
+  });
