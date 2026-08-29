@@ -21,6 +21,14 @@ export default function ApprovalActionPage() {
   const [busyAction, setBusyAction] = useState(null); // "approve" | "return" | "reject" | null
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
 
+  /*
+   * Handling one source requisition separately (return/reject)
+   * instead of deciding on the whole consolidated batch at once.
+   */
+  const [handlingId, setHandlingId] = useState(null);
+  const [handlingComment, setHandlingComment] = useState("");
+  const [handlingBusy, setHandlingBusy] = useState(null);
+
   const load = useCallback(async () => {
     try {
       const { data } = await axios.get(`/api/requisitions/${id}`);
@@ -82,6 +90,42 @@ export default function ApprovalActionPage() {
     }
   }
 
+  async function handlePartial(sourceId, action) {
+    if (!handlingComment.trim()) {
+      toast.error("A comment is required.");
+      return;
+    }
+    setHandlingBusy(action);
+    try {
+      const { data } = await axios.post(`/api/approvals/${id}/partial`, {
+        sourceRequisitionId: sourceId,
+        action,
+        comment: handlingComment.trim(),
+      });
+
+      if (data.closed) {
+        toast.success(
+          "Requisition sent back — nothing left to approve, so this consolidated requisition was closed."
+        );
+        router.push("/approvals");
+        return;
+      }
+
+      toast.success(
+        action === "return"
+          ? "That requisition was sent back on its own."
+          : "That requisition was rejected on its own."
+      );
+      await load();
+      setHandlingId(null);
+      setHandlingComment("");
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Failed to handle that requisition separately.");
+    } finally {
+      setHandlingBusy(null);
+    }
+  }
+
   if (!requisition) return <p>Loading…</p>;
 
   return (
@@ -115,8 +159,100 @@ export default function ApprovalActionPage() {
 
           <section className={styles.section}>
             <h4 className={styles.sectionTitle}>Items</h4>
-            <RequisitionItemsTable items={requisition.items} readOnly />
+            <RequisitionItemsTable
+              items={requisition.items}
+              requestingUnits={requisition.requestingUnits}
+              readOnly
+            />
           </section>
+
+          {requisition.isConsolidated && requisition.sourceRequisitions?.length > 0 && (
+            <section className={styles.section}>
+              <h4 className={styles.sectionTitle}>Requesting Units</h4>
+              <p className={styles.hint}>
+                This is a consolidated requisition. You can approve it as a whole below, or handle
+                one requisition separately here without deciding on the rest.
+              </p>
+
+              <ul className={styles.sourceList}>
+                {requisition.sourceRequisitions.map((source) => (
+                  <li key={source._id} className={styles.sourceItem}>
+                    <div className={styles.sourceRow}>
+                      <div>
+                        <span className="mono">
+                          {source.requisitionNumber || source._id.slice(-6)}
+                        </span>
+                        <span className={styles.sourceMeta}>
+                          {source.department === "N/A" ? "Unassigned" : source.department} ·{" "}
+                          {source.requester?.fullName || "Unknown requester"} ·{" "}
+                          <span className="mono">{formatNaira(source.estimatedCost)}</span>
+                        </span>
+                      </div>
+
+                      {handlingId !== source._id && (
+                        <button
+                          type="button"
+                          className={styles.handleSeparatelyBtn}
+                          onClick={() => {
+                            setHandlingId(source._id);
+                            setHandlingComment("");
+                          }}
+                        >
+                          Handle separately
+                        </button>
+                      )}
+                    </div>
+
+                    {handlingId === source._id && (
+                      <div className={styles.handlePanel}>
+                        <p className={styles.handlePanelHint}>
+                          Send this requisition back on its own, or reject it — it stays part of
+                          the consolidation for now if you cancel.
+                        </p>
+
+                        <textarea
+                          className={styles.handlePanelTextarea}
+                          rows={2}
+                          placeholder="Comment (required)…"
+                          value={handlingComment}
+                          onChange={(e) => setHandlingComment(e.target.value)}
+                        />
+
+                        <div className={styles.handlePanelActions}>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={() => handlePartial(source._id, "return")}
+                            loading={handlingBusy === "return"}
+                          >
+                            Return This One
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="danger"
+                            onClick={() => handlePartial(source._id, "reject")}
+                            loading={handlingBusy === "reject"}
+                          >
+                            Reject This One
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            onClick={() => {
+                              setHandlingId(null);
+                              setHandlingComment("");
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {requisition.attachments?.length > 0 && (
             <section className={styles.section}>
