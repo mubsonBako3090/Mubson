@@ -35,6 +35,19 @@ const ItemSchema = new mongoose.Schema(
       type: String,
     },
 
+    /*
+     * Only set on items belonging to a consolidated
+     * requisition — identifies exactly which source
+     * requisition this item came from, so one source can
+     * be detached (dropped from the consolidation) without
+     * ambiguity even when two sources share the same
+     * department.
+     */
+    sourceRequisitionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Requisition",
+    },
+
     quantity: {
       type: Number,
       required: true,
