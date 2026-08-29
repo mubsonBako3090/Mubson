@@ -63,6 +63,13 @@ export default function ConsolidateRequisitionPage() {
     userRole === ROLES.PROVOST ||
     userRole === ROLES.VC;
 
+  // Dean/Provost specifically: their result is a draft that goes
+  // through a review step (drop items/sources) before being sent —
+  // VC's result is finalized immediately, same as Procurement/Admin.
+  const isDraftOutcomeRole =
+    userRole === ROLES.DEAN ||
+    userRole === ROLES.PROVOST;
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -246,28 +253,18 @@ export default function ConsolidateRequisitionPage() {
       if (created.status === "draft") {
         /*
          * Dean/Provost: consolidating doubles as their
-         * approval for the selected requisitions — send the
-         * merged requisition straight to the next approver
-         * rather than leaving it sitting as an unsubmitted
-         * draft.
+         * approval for the selected requisitions, but they
+         * may still want to drop one before it goes out —
+         * take them to the review step rather than sending
+         * it immediately.
          */
-        try {
-          await axios.post(`/api/requisitions/${created._id}/submit`);
-          toast.success("Consolidated requisition approved and sent to the next approver.");
-        } catch (submitErr) {
-          toast.error(
-            submitErr.response?.data?.message ||
-              "Consolidated requisition created, but couldn't be sent automatically — please submit it from the requisition page."
-          );
-        }
-      } else {
-        // VC/Procurement/Admin: already finalized, ready for processing.
-        toast.success("Consolidated requisition created and ready for processing.");
+        toast.success("Consolidated draft created — review it before sending.");
+        router.push(`/requisitions/consolidate/${created._id}/review`);
+        return;
       }
 
-      // Route to the detail (view) page, not /edit — the edit wizard is
-      // built for the single-department creation flow and isn't aware of
-      // consolidated records (requestingUnits, multi-department items).
+      // VC/Procurement/Admin: already finalized, ready for processing.
+      toast.success("Consolidated requisition created and ready for processing.");
       router.push(`/requisitions/${created._id}`);
     } catch (err) {
       toast.error(err.response?.data?.message || "Failed to create consolidated requisition.");
@@ -286,8 +283,10 @@ export default function ConsolidateRequisitionPage() {
         <div>
           <h1 className={styles.heading}>Consolidate Requisitions</h1>
           <p className={styles.subheading}>
-            {isPreApprovalRole
-              ? "Select requisitions currently pending your approval and merge them into one. Consolidating doubles as your approval — the merged requisition is sent straight to the next approver."
+            {isDraftOutcomeRole
+              ? "Select requisitions currently pending your approval and merge them into one. Consolidating doubles as your approval — you'll get a chance to review before it's sent to the next approver."
+              : isPreApprovalRole
+              ? "Select requisitions currently pending your approval and merge them into one. Consolidating doubles as your approval and finalizes them for Procurement."
               : "Select already fully-approved requisitions from the units under your authority and merge them into one for processing."}{" "}
             Each item keeps its originating department for traceability.
           </p>
@@ -515,11 +514,17 @@ export default function ConsolidateRequisitionPage() {
             </div>
 
             <Button type="submit" fullWidth loading={submitting} disabled={selectedIds.size === 0}>
-              {isPreApprovalRole ? "Consolidate & Approve" : "Create Consolidated Requisition"}
+              {isDraftOutcomeRole
+                ? "Consolidate & Review"
+                : isPreApprovalRole
+                ? "Consolidate & Approve"
+                : "Create Consolidated Requisition"}
             </Button>
             <p className={styles.summaryNote}>
-              {isPreApprovalRole
-                ? "This immediately approves the selected requisitions (via consolidation) and routes the merged requisition to the next approver."
+              {isDraftOutcomeRole
+                ? "This approves the selected requisitions via consolidation. You'll review the merged draft — and can still drop one — before it's sent to the next approver."
+                : isPreApprovalRole
+                ? "This immediately approves the selected requisitions (via consolidation) and routes the merged requisition to Procurement."
                 : "The merged requisition will be created ready for Procurement processing."}
             </p>
           </form>
@@ -527,4 +532,4 @@ export default function ConsolidateRequisitionPage() {
       )}
     </div>
   );
-                                           }
+}
