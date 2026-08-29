@@ -22,7 +22,7 @@ import { ROLES } from "@/constants/roles";
  * LOAD AND VERIFY CURRENT APPROVAL STEP
  * --------------------------------------------------
  */
-async function loadAndVerifyStep(
+export async function loadAndVerifyStep(
   requisitionId,
   approverId
 ) {
@@ -365,7 +365,7 @@ export async function approveStep({
   }
 
   return requisition;
-}
+          }
 
 /*
  * --------------------------------------------------
@@ -646,3 +646,343 @@ export async function rejectStep({
 
   return requisition;
     }
+
+/*
+ * --------------------------------------------------
+ * PARTIAL RESOLVE (consolidated requisitions only)
+ * --------------------------------------------------
+ *
+ * Lets the CURRENT approver on a pending consolidated
+ * requisition split off ONE source requisition instead of
+ * deciding on the whole merged batch at once — e.g. a
+ * Provost approving 4 of 6 merged departments while
+ * sending the other 2 back.
+ *
+ * action "return": the split-off source is revived exactly
+ * as it was before being folded in — same status, same
+ * frozen approvalChain/currentStepIndex — so it lands back
+ * with whichever approver (e.g. the Dean who consolidated
+ * it) it was already waiting on, with this comment attached
+ * for context. Nothing about its own chain changes; only
+ * the fact that it's no longer merged does.
+ *
+ * action "reject": the split-off source is terminated,
+ * exactly like a normal final rejection.
+ *
+ * The remaining consolidated requisition stays PENDING at
+ * the SAME step — the approver can keep splitting, or
+ * fully approve what's left. If nothing is left, the
+ * consolidated requisition itself is closed out.
+ */
+export async function partialResolveSource({
+  requisitionId,
+  approverUser,
+  sourceRequisitionId,
+  action,
+  comment,
+}) {
+  if (
+    action !== "return" &&
+    action !== "reject"
+  ) {
+    throw new Error(
+      "Invalid action."
+    );
+  }
+
+  if (!comment?.trim()) {
+    throw new Error(
+      "A comment is required."
+    );
+  }
+
+  const requisition =
+    await loadAndVerifyStep(
+      requisitionId,
+      approverUser.id
+    );
+
+  if (!requisition.isConsolidated) {
+    throw new Error(
+      "This requisition is not a consolidated requisition."
+    );
+  }
+
+  const stillIncluded =
+    requisition.sourceRequisitions.some(
+      (id) =>
+        String(id) ===
+        String(sourceRequisitionId)
+    );
+
+  if (!stillIncluded) {
+    throw new Error(
+      "That requisition is not part of this consolidation."
+    );
+  }
+
+  const step =
+    requisition.approvalChain[
+      requisition.currentStepIndex
+    ];
+
+  /*
+   * --------------------------------------------------
+   * SPLIT OFF THE SOURCE
+   * --------------------------------------------------
+   */
+  requisition.sourceRequisitions =
+    requisition.sourceRequisitions.filter(
+      (id) =>
+        String(id) !==
+        String(sourceRequisitionId)
+    );
+
+  requisition.items =
+    requisition.items.filter(
+      (item) =>
+        String(
+          item.sourceRequisitionId
+        ) !==
+        String(sourceRequisitionId)
+    );
+
+  const source =
+    await Requisition.findById(
+      sourceRequisitionId
+    ).populate("requester");
+
+  if (!source) {
+    throw new Error(
+      "Source requisition not found."
+    );
+  }
+
+  source.comments.push({
+    author: approverUser.id,
+    message: comment,
+  });
+
+  if (action === "return") {
+    /*
+     * Revive it exactly as it was — its own
+     * status/approvalChain/currentStepIndex are
+     * untouched, since consolidating never
+     * changed them in the first place.
+     */
+    source.consolidatedInto =
+      undefined;
+
+    source.consolidatedAt =
+      undefined;
+
+    await source.save();
+
+    await Approval.create({
+      requisition: requisition._id,
+      stepIndex:
+        requisition.currentStepIndex,
+      role: step.role,
+      approver: approverUser.id,
+      action: APPROVAL_ACTIONS.RETURN,
+      comment,
+    });
+
+    await sendRequisitionReturnedEmail(
+      source.requester,
+      source,
+      comment
+    );
+
+    /*
+     * Notify whichever approver the source is
+     * now waiting on again (its own frozen step).
+     */
+    const sourceStep =
+      source.approvalChain[
+        source.currentStepIndex
+      ];
+
+    if (sourceStep?.approver) {
+      const sourceApprover =
+        await User.findById(
+          sourceStep.approver
+        );
+
+      if (sourceApprover) {
+        await sendApprovalStepEmail(
+          sourceApprover,
+          source
+        );
+      }
+    }
+  } else {
+    /*
+     * Terminate it, same as a normal final rejection.
+     */
+    source.status =
+      REQUISITION_STATUS.REJECTED;
+
+    source.decidedAt = new Date();
+
+    source.awaitingRequesterAction =
+      false;
+
+    source.consolidatedInto =
+      undefined;
+
+    source.consolidatedAt =
+      undefined;
+
+    source.procurementStatus =
+      undefined;
+
+    source.procurementOfficer =
+      undefined;
+
+    source.procurementReceivedAt =
+      undefined;
+
+    await source.save();
+
+    await Approval.create({
+      requisition: requisition._id,
+      stepIndex:
+        requisition.currentStepIndex,
+      role: step.role,
+      approver: approverUser.id,
+      action: APPROVAL_ACTIONS.REJECT,
+      comment,
+    });
+
+    await sendRequisitionRejectedEmail(
+      source.requester,
+      source,
+      comment
+    );
+  }
+
+  await AuditLog.create({
+    actor: approverUser.id,
+    action:
+      "requisition.consolidated_partial_" +
+      action,
+    entityType: "Requisition",
+    entityId: requisition._id,
+    details: {
+      sourceRequisitionId: String(
+        sourceRequisitionId
+      ),
+      comment,
+    },
+  });
+
+  /*
+   * --------------------------------------------------
+   * RECOMPUTE OR CLOSE THE CONSOLIDATED REQUISITION
+   * --------------------------------------------------
+   */
+  let closed = false;
+
+  if (
+    requisition.sourceRequisitions
+      .length === 0
+  ) {
+    closed = true;
+
+    requisition.status =
+      REQUISITION_STATUS.REJECTED;
+
+    requisition.decidedAt =
+      new Date();
+
+    requisition.awaitingRequesterAction =
+      false;
+
+    requisition.comments.push({
+      author: approverUser.id,
+      message:
+        "Consolidated requisition closed automatically — no requisitions remain after being handled separately.",
+    });
+  } else {
+    const unitMap = new Map();
+
+    for (const item of requisition.items) {
+      const key = [
+        item.requestingCollegeId,
+        item.requestingFacultyId,
+        item.requestingDepartment,
+      ].join("|");
+
+      if (!unitMap.has(key)) {
+        unitMap.set(key, {
+          collegeId:
+            item.requestingCollegeId,
+          facultyId:
+            item.requestingFacultyId,
+          department:
+            item.requestingDepartment,
+        });
+      }
+    }
+
+    const requestingUnits = [
+      ...unitMap.values(),
+    ];
+
+    const distinctColleges = [
+      ...new Set(
+        requestingUnits.map(
+          (u) => u.collegeId
+        )
+      ),
+    ];
+
+    const distinctFaculties = [
+      ...new Set(
+        requestingUnits.map(
+          (u) => u.facultyId
+        )
+      ),
+    ];
+
+    requisition.requestingUnits =
+      requestingUnits;
+
+    requisition.collegeId =
+      distinctColleges.length === 1
+        ? distinctColleges[0]
+        : "N/A";
+
+    requisition.facultyId =
+      distinctColleges.length ===
+        1 &&
+      distinctFaculties.length === 1
+        ? distinctFaculties[0]
+        : "N/A";
+
+    requisition.department =
+      requestingUnits.length === 1
+        ? requestingUnits[0]
+            .department
+        : "N/A";
+
+    requisition.isConsolidated =
+      requestingUnits.length > 1;
+
+    requisition.estimatedCost =
+      requisition.items.reduce(
+        (sum, item) =>
+          sum +
+          Number(
+            item.totalCost || 0
+          ),
+        0
+      );
+  }
+
+  await requisition.save();
+
+  return { requisition, source, closed };
+        }
+
