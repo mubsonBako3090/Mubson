@@ -53,6 +53,9 @@ const itemSchema =
 
     requestingDepartment: Joi.string()
       .allow(null, ""),
+
+    sourceRequisitionId: Joi.string()
+      .allow(null, ""),
   });
 
 const draftItemSchema =
@@ -79,6 +82,9 @@ const draftItemSchema =
       .allow(null, ""),
 
     requestingDepartment: Joi.string()
+      .allow(null, ""),
+
+    sourceRequisitionId: Joi.string()
       .allow(null, ""),
   });
 
