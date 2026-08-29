@@ -17,7 +17,6 @@ const urgencyValues =
  */
 
 const requestingUnitSchema =
-const requestingUnitSchema =
   Joi.object({
     _id: Joi.string()
       .optional(),
