@@ -26,16 +26,8 @@ function roleLabel(role) {
  *
  * IMPORTANT:
  *
- * Procurement is NOT an approval step.
- * It is a processing stage after VC gives final approval.
- *
- * Therefore:
- *
- * HOD       -> Approved
- * Dean      -> Approved
- * Provost   -> Approved
- * VC        -> Approved
- * Procurement -> Received for Processing / Processing
+ * Procurement has two stages: market-survey review before VC
+ * and processing after VC approval.
  */
 function getApprovalStatus(requisition, index) {
   const chain = requisition.approvalChain || [];
@@ -65,19 +57,15 @@ function getApprovalStatus(requisition, index) {
     return "returned";
   }
 
-  /*
-   * PROCUREMENT
-   *
-   * Procurement is a processing stage, not an approval.
-   *
-   * Once VC has approved, the requisition status becomes
-   * "approved" and currentStepIndex moves to Procurement.
-   *
-   * Therefore Procurement should NOT appear as
-   * "Pending Approval".
-   */
+  /* Final Procurement processing stage. */
   if (step.type === "processing") {
     return "processing";
+  }
+
+  /* Procurement market-survey stage before VC. */
+  if (step.type === "procurement_review") {
+    if (requisition.procurementStatus === "submitted_to_vc") return "approved";
+    return index === requisition.currentStepIndex ? "pending" : "waiting";
   }
 
   /*
@@ -144,6 +132,12 @@ function procurementText(requisition) {
    */
   if (requisition.status === "approved") {
     switch (requisition.procurementStatus) {
+      case "review":
+        return "Market Survey Review";
+
+      case "submitted_to_vc":
+        return "Submitted to VC";
+
       case "received":
         return "Received for Processing";
 
@@ -158,11 +152,15 @@ function procurementText(requisition) {
     }
   }
 
-  /*
-   * Before VC approval, Procurement has not received
-   * the requisition for processing yet.
-   */
-  return "Awaiting Final Approval";
+  if (requisition.procurementStatus === "review") {
+    return "Market Survey Review";
+  }
+
+  if (requisition.procurementStatus === "submitted_to_vc") {
+    return "Submitted to VC";
+  }
+
+  return "Awaiting Procurement Review";
 }
 
 export default function RequisitionStatusTimeline({
@@ -316,4 +314,4 @@ export default function RequisitionStatusTimeline({
       </section>
     </div>
   );
-}
+    }
