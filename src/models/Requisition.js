@@ -60,6 +60,31 @@ const ItemSchema = new mongoose.Schema(
       min: 0,
     },
 
+    /*
+     * Procurement keeps the original requester price separate
+     * from the market-survey price. `unitCost` remains the
+     * effective/current unit cost used by totals and documents.
+     */
+    requestedUnitCost: {
+      type: Number,
+      min: 0,
+    },
+
+    requestedTotalCost: {
+      type: Number,
+      min: 0,
+    },
+
+    procurementUnitCost: {
+      type: Number,
+      min: 0,
+    },
+
+    procurementNote: {
+      type: String,
+      trim: true,
+    },
+
     totalCost: {
       type: Number,
       required: true,
@@ -74,6 +99,25 @@ const ItemSchema = new mongoose.Schema(
  * ATTACHMENT SCHEMA
  * --------------------------------------------------
  */
+const ProcurementPriceHistorySchema = new mongoose.Schema(
+  {
+    revision: { type: Number, required: true },
+    itemName: { type: String, required: true },
+    itemIndex: { type: Number, required: true },
+    requestedUnitCost: { type: Number, min: 0 },
+    previousProcurementUnitCost: { type: Number, min: 0 },
+    procurementUnitCost: { type: Number, required: true, min: 0 },
+    note: { type: String, trim: true },
+    changedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    changedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const AttachmentSchema = new mongoose.Schema(
   {
     url: {
@@ -156,7 +200,7 @@ const ApprovalChainStepSchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: ["approval", "processing"],
+      enum: ["approval", "procurement_review", "processing"],
       default: "approval",
     },
   },
@@ -430,11 +474,41 @@ requestingUnits: [
     procurementStatus: {
       type: String,
       enum: [
+        "review",
+        "submitted_to_vc",
         "ready",
         "processing",
         "completed",
       ],
       default: undefined,
+    },
+
+    /* Procurement market-survey / BOQ stage metadata. */
+    procurementReviewStartedAt: {
+      type: Date,
+    },
+
+    submittedToVcAt: {
+      type: Date,
+    },
+
+    boqGeneratedAt: {
+      type: Date,
+    },
+
+    procurementRevision: {
+      type: Number,
+      default: 0,
+    },
+
+    procurementNotes: {
+      type: String,
+      trim: true,
+    },
+
+    procurementPriceHistory: {
+      type: [ProcurementPriceHistorySchema],
+      default: [],
     },
 
     /*
