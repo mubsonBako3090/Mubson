@@ -6,18 +6,22 @@ import toast from "react-hot-toast";
 import Button from "@/components/ui/Button";
 import { formatNaira } from "@/utils/formatNaira";
 import { ROLES } from "@/constants/roles";
-import { useAuthStore } from "@/store/authStore";
 import styles from "./ProcurementReviewPanel.module.css";
 
-export default function ProcurementReviewPanel({ requisition, onUpdated }) {
-  const user = useAuthStore((s) => s.user);
-  const currentStep = requisition?.approvalChain?.[requisition.currentStepIndex];
-  const isReviewStage =
-    user?.role === ROLES.PROCUREMENT &&
-    currentStep?.role === ROLES.PROCUREMENT &&
-    currentStep?.type === "procurement_review" &&
-    String(currentStep?.approver?._id || currentStep?.approver) === String(user?.id);
+export default function ProcurementReviewPanel({
+  requisition,
+  onUpdated,
+}) {
+  const currentStep =
+    requisition?.approvalChain?.[
+      requisition.currentStepIndex
+    ];
 
+  const isReviewStage =
+    currentStep?.role === ROLES.PROCUREMENT &&
+    currentStep?.type === "procurement_review";
+
+  // ...rest of your existing code
   const [items, setItems] = useState([]);
   const [notes, setNotes] = useState(requisition?.procurementNotes || "");
   const [comment, setComment] = useState("");
