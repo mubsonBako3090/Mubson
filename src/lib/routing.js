@@ -1,6 +1,3 @@
-====================================================================================================
-FILE: src/lib/routing.js
-====================================================================================================
 import { getCollegeById } from "@/constants/colleges";
 import { ROLES } from "@/constants/roles";
 import User from "@/models/User";
