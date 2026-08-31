@@ -86,12 +86,20 @@ export async function loadAndVerifyStep(
   }
 
   /*
-   * Procurement is a processing stage,
-   * not an approval stage.
+   * Procurement has its own market-survey stage.
+   * It must use the dedicated procurement review action,
+   * not the normal approval endpoint.
    */
-  if (
-    step.type === "processing"
-  ) {
+  if (step.type === "procurement_review") {
+    throw new Error(
+      "Procurement must complete the market survey and submit the requisition to the VC from the Procurement Review stage."
+    );
+  }
+
+  /*
+   * Procurement is a post-VC processing stage, not an approval.
+   */
+  if (step.type === "processing") {
     throw new Error(
       "This requisition has already received final approval and is now with Procurement for processing."
     );
@@ -367,6 +375,274 @@ export async function approveStep({
       );
     }
   }
+
+  return requisition;
+}
+
+/*
+ * --------------------------------------------------
+ * PROCUREMENT MARKET-SURVEY REVIEW
+ * --------------------------------------------------
+ *
+ * Procurement may update the effective unit cost of every
+ * item after conducting a market survey. The original requester
+ * price is preserved on the item for audit/comparison.
+ */
+export async function updateProcurementReview({
+  requisitionId,
+  procurementUser,
+  items,
+  notes,
+}) {
+  const requisition = await Requisition.findById(requisitionId);
+
+  if (!requisition) {
+    throw new Error("Requisition not found.");
+  }
+
+  const step = requisition.approvalChain?.[requisition.currentStepIndex];
+
+  if (
+    !step ||
+    step.role !== ROLES.PROCUREMENT ||
+    step.type !== "procurement_review" ||
+    String(step.approver) !== String(procurementUser.id)
+  ) {
+    throw new Error("This requisition is not currently awaiting Procurement market-survey review.");
+  }
+
+  if (requisition.status !== REQUISITION_STATUS.PENDING) {
+    throw new Error("This requisition is not currently pending review.");
+  }
+
+  if (!Array.isArray(items) || items.length !== requisition.items.length) {
+    throw new Error("Procurement must provide a market-survey price for every requisition item.");
+  }
+
+  let estimatedCost = 0;
+  const revision = Number(requisition.procurementRevision || 0) + 1;
+
+  requisition.items.forEach((item, index) => {
+    const incoming = items[index];
+    const marketUnitCost = Number(incoming?.procurementUnitCost);
+
+    if (!Number.isFinite(marketUnitCost) || marketUnitCost < 0) {
+      throw new Error(`Invalid procurement unit cost for item ${index + 1}.`);
+    }
+
+    if (item.requestedUnitCost === undefined || item.requestedUnitCost === null) {
+      item.requestedUnitCost = Number(item.unitCost || 0);
+    }
+
+    if (item.requestedTotalCost === undefined || item.requestedTotalCost === null) {
+      item.requestedTotalCost = Number(item.totalCost || 0);
+    }
+
+    const previousProcurementUnitCost =
+      item.procurementUnitCost === undefined || item.procurementUnitCost === null
+        ? undefined
+        : Number(item.procurementUnitCost);
+
+    item.procurementUnitCost = marketUnitCost;
+    item.unitCost = marketUnitCost;
+    item.totalCost = Number(item.quantity || 0) * marketUnitCost;
+    item.procurementNote = String(incoming?.procurementNote || "").trim();
+
+    if (!Array.isArray(requisition.procurementPriceHistory)) {
+      requisition.procurementPriceHistory = [];
+    }
+    requisition.procurementPriceHistory.push({
+      revision,
+      itemName: item.name,
+      itemIndex: index,
+      requestedUnitCost: Number(item.requestedUnitCost || 0),
+      previousProcurementUnitCost,
+      procurementUnitCost: marketUnitCost,
+      note: item.procurementNote,
+      changedBy: procurementUser.id,
+      changedAt: new Date(),
+    });
+
+    estimatedCost += item.totalCost;
+  });
+
+  requisition.estimatedCost = estimatedCost;
+  requisition.procurementStatus = "review";
+  requisition.procurementOfficer = procurementUser.id;
+  requisition.procurementReviewStartedAt ||= new Date();
+  requisition.procurementNotes = String(notes || "").trim();
+  requisition.procurementRevision = revision;
+
+  await requisition.save();
+
+  await AuditLog.create({
+    actor: procurementUser.id,
+    action: "requisition.procurement_market_survey_updated",
+    entityType: "Requisition",
+    entityId: requisition._id,
+    details: {
+      revision: requisition.procurementRevision,
+      estimatedCost,
+      notes: requisition.procurementNotes,
+    },
+  });
+
+  return requisition;
+}
+
+/*
+ * --------------------------------------------------
+ * PROCUREMENT SUBMITS MARKET-SURVEYED REQUISITION TO VC
+ * --------------------------------------------------
+ */
+export async function submitProcurementToVc({
+  requisitionId,
+  procurementUser,
+  comment,
+}) {
+  const requisition = await Requisition.findById(requisitionId);
+
+  if (!requisition) {
+    throw new Error("Requisition not found.");
+  }
+
+  const step = requisition.approvalChain?.[requisition.currentStepIndex];
+
+  if (
+    !step ||
+    step.role !== ROLES.PROCUREMENT ||
+    step.type !== "procurement_review" ||
+    String(step.approver) !== String(procurementUser.id)
+  ) {
+    throw new Error("This requisition is not currently awaiting Procurement market-survey review.");
+  }
+
+  if (requisition.status !== REQUISITION_STATUS.PENDING) {
+    throw new Error("This requisition is not currently pending review.");
+  }
+
+  const incomplete = requisition.items.some(
+    (item) =>
+      item.procurementUnitCost === undefined ||
+      item.procurementUnitCost === null
+  );
+
+  if (incomplete) {
+    throw new Error("Complete the market-survey price for every item before sending the requisition to the VC.");
+  }
+
+  const nextIndex = requisition.currentStepIndex + 1;
+  const nextStep = requisition.approvalChain[nextIndex];
+
+  if (!nextStep || nextStep.role !== ROLES.VC || nextStep.type !== "approval") {
+    throw new Error("The requisition does not have a valid VC approval step after Procurement.");
+  }
+
+  requisition.currentStepIndex = nextIndex;
+  requisition.procurementStatus = "submitted_to_vc";
+  requisition.submittedToVcAt = new Date();
+  requisition.status = REQUISITION_STATUS.PENDING;
+
+  if (comment?.trim()) {
+    requisition.comments.push({
+      author: procurementUser.id,
+      message: comment.trim(),
+    });
+  }
+
+  await requisition.save();
+
+  await AuditLog.create({
+    actor: procurementUser.id,
+    action: "requisition.procurement_submitted_to_vc",
+    entityType: "Requisition",
+    entityId: requisition._id,
+    details: {
+      fromStepIndex: requisition.currentStepIndex - 1,
+      toStepIndex: nextIndex,
+      estimatedCost: requisition.estimatedCost,
+      comment: comment?.trim() || undefined,
+    },
+  });
+
+  const vc = await User.findById(nextStep.approver);
+  if (vc) {
+    await sendApprovalStepEmail(vc, requisition);
+  }
+
+  return requisition;
+}
+
+
+/*
+ * --------------------------------------------------
+ * PROCUREMENT FINAL PROCESSING
+ * --------------------------------------------------
+ */
+export async function updateProcurementProcessing({
+  requisitionId,
+  procurementUser,
+  action,
+  comment,
+}) {
+  const requisition = await Requisition.findById(requisitionId);
+
+  if (!requisition) {
+    throw new Error("Requisition not found.");
+  }
+
+  const step = requisition.approvalChain?.[requisition.currentStepIndex];
+
+  if (
+    !step ||
+    step.role !== ROLES.PROCUREMENT ||
+    step.type !== "processing" ||
+    String(step.approver) !== String(procurementUser.id)
+  ) {
+    throw new Error("This requisition is not currently assigned to you for Procurement processing.");
+  }
+
+  if (requisition.status !== REQUISITION_STATUS.APPROVED) {
+    throw new Error("Only VC-approved requisitions can enter Procurement processing.");
+  }
+
+  if (!["start", "complete"].includes(action)) {
+    throw new Error("Invalid Procurement processing action.");
+  }
+
+  if (action === "start") {
+    if (!["ready", "processing"].includes(requisition.procurementStatus)) {
+      throw new Error("This requisition is not ready for Procurement processing.");
+    }
+    requisition.procurementStatus = "processing";
+    requisition.procurementStartedAt ||= new Date();
+  } else {
+    if (requisition.procurementStatus !== "processing") {
+      throw new Error("Start Procurement processing before completing it.");
+    }
+    requisition.procurementStatus = "completed";
+    requisition.procurementCompletedAt = new Date();
+  }
+
+  if (comment?.trim()) {
+    requisition.comments.push({
+      author: procurementUser.id,
+      message: comment.trim(),
+    });
+  }
+
+  await requisition.save();
+
+  await AuditLog.create({
+    actor: procurementUser.id,
+    action: `requisition.procurement_${action}`,
+    entityType: "Requisition",
+    entityId: requisition._id,
+    details: {
+      procurementStatus: requisition.procurementStatus,
+      comment: comment?.trim() || undefined,
+    },
+  });
 
   return requisition;
 }
@@ -1205,4 +1481,4 @@ export async function partialResolveItems({
   await requisition.save();
 
   return { requisition, splitInto: results, closed };
-}
+    }
