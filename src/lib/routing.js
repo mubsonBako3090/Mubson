@@ -1,3 +1,6 @@
+====================================================================================================
+FILE: src/lib/routing.js
+====================================================================================================
 import { getCollegeById } from "@/constants/colleges";
 import { ROLES } from "@/constants/roles";
 import User from "@/models/User";
@@ -14,18 +17,21 @@ const ROUTING_CHAINS = {
     ROLES.HOD,
     ROLES.DEAN,
     ROLES.PROVOST,
+    ROLES.PROCUREMENT,
     ROLES.VC,
   ],
 
   postgraduate: [
     ROLES.HOD,
     ROLES.PROVOST,
+    ROLES.PROCUREMENT,
     ROLES.VC,
   ],
 
   basicStudies: [
     ROLES.HOD,
     ROLES.PROVOST,
+    ROLES.PROCUREMENT,
     ROLES.VC,
   ],
 };
@@ -72,12 +78,14 @@ export async function buildApprovalChain({
   /*
    * PROVOST creates:
    *
-   * Provost -> VC -> Procurement
+   * Provost -> Procurement Review -> VC -> Procurement Processing
    *
-   * The Provost must not approve their own requisition.
+   * The Provost must not approve their own requisition, but
+   * Procurement still performs the market-survey stage before VC.
    */
   else if (requesterRole === ROLES.PROVOST) {
     roleSequence = [
+      ROLES.PROCUREMENT,
       ROLES.VC,
     ];
   }
@@ -105,6 +113,7 @@ export async function buildApprovalChain({
    */
   else if (requesterRole === ROLES.ADMIN) {
     roleSequence = [
+      ROLES.PROCUREMENT,
       ROLES.VC,
     ];
   }
@@ -184,19 +193,20 @@ export async function buildApprovalChain({
     chain.push({
       role,
       approver: approver._id,
-      type: "approval",
+      type: role === ROLES.PROCUREMENT
+        ? "procurement_review"
+        : "approval",
     });
   }
 
   /*
-   * PROCUREMENT IS ALWAYS THE POST-APPROVAL
-   * PROCESSING STAGE.
+   * PROCUREMENT HAS A SECOND, POST-VC PROCESSING STAGE.
    *
-   * It is NOT an approval step.
+   * Normal chain: HOD -> Dean -> Provost -> Procurement Review
+   * -> VC -> Procurement Processing
    *
-   * For example:
-   *
-   * HOD -> Dean -> Provost -> VC -> Procurement
+   * Special creator chains above may already contain the first
+   * Procurement stage. Only append the final processing stage.
    */
   const procurementOfficer =
     await User.findOne({
